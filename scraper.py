@@ -53,7 +53,7 @@ def get_price_kitapyurdu(url):
         print(f"Error: {e}")
         return None
 
-# +10 POINTS SCRAPY FUNCTION
+# SCRAPY FUNCTION
 class KitapyurduScraper(scrapy.Spider):
     name = "kitapyurdu"
     
@@ -100,7 +100,6 @@ class KitapyurduScraper(scrapy.Spider):
 
 def scrape_with_scrapy(urls):
     """
-    Extract prices using Scrapy - +10 POINTS
     Args:
         urls: List of URLs to scrape
     Returns:
@@ -137,7 +136,7 @@ if __name__ == "__main__":
     if price:
         print(f"Normal function: {price} TL")
     
-    # Test Scrapy - +10 POINTS
+    # Test Scrapy
     print("\nTesting Scrapy (+10 points)...")
     test_urls = [
         "https://www.kitapyurdu.com/kitap/harry-potter-ve-felsefe-tasi/32780.html",
