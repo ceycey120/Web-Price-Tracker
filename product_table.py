@@ -79,10 +79,10 @@ class PriceDataManager:
 # ------------ Example Usage ------------ #
 if __name__ == "__main__":
     m = PriceDataManager()
-    m.add_price("SQLite", 0)       # product = database
-    m.add_price("MySQL", 0)
-    m.add_price("PostgreSQL", 0)
-    m.add_price("MongoDB", 0)
+    m.add_price("SQLite", 23)       # product = database
+    m.add_price("MySQL", 4)
+    m.add_price("PostgreSQL", 8)
+    m.add_price("MongoDB", 17)
     m.display_price_history()
 
     
