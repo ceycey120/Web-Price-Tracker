@@ -658,7 +658,7 @@ def test_all_spiders():
     print("Testing all spiders...")
     
     for site_name, test_urls in test_cases:
-        print(f"\n🔍 Testing {site_name}...")
+        print(f"\nTesting {site_name}...")
         
         if site_name == 'kitapyurdu':
             # Test original function
@@ -690,7 +690,7 @@ def test_all_spiders():
         except Exception as e:
             print(f"{site_name} Scrapy spider: {e}")
     
-    print("\n✅ All tests completed!")
+    print("\nAll tests completed!")
 
 # ============================================
 # ENTRY POINT
@@ -714,7 +714,7 @@ if __name__ == "__main__":
         run_scrapy_spider(MultiSiteSpider, example_urls, "demo_prices.json")
         
         # Also test original function
-        print("\n🔧 Testing original function for backward compatibility...")
+        print("\nTesting original function for backward compatibility...")
         price = get_price_kitapyurdu(example_urls[0])
         if price:
             print(f"Original function works: {price} TL")
