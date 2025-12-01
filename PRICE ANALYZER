@@ -1,201 +1,263 @@
 import requests
 from bs4 import BeautifulSoup
 import re
-import sqlite3
+import statistics
 from datetime import datetime, timedelta
 from tabulate import tabulate
-import statistics
+from typing import List, Optional, Dict, Any
+from dataclasses import dataclass
 
-# --- PART 1: Database Manager ---
+# --- SQLAlchemy Setup ---
+from sqlalchemy import create_engine, Column, Integer, String, Float, DateTime
+from sqlalchemy.orm import sessionmaker, declarative_base
+from sqlalchemy.engine import Engine
+from sqlalchemy.orm import Session
+
+# Define the Base class for declarative models
+Base = declarative_base()
+
+# --- PART 1: SQLAlchemy Model ---
+class PriceEntry(Base):
+    """SQLAlchemy ORM model for price data."""
+    __tablename__ = 'prices'
+    
+    id: int = Column(Integer, primary_key=True, autoincrement=True)
+    product_name: str = Column(String, nullable=False)
+    price: float = Column(Float, nullable=False)
+    date: datetime = Column(DateTime, nullable=False, default=datetime.now)
+
+    def __repr__(self) -> str:
+        return f"<PriceEntry(name='{self.product_name}', price={self.price}, date='{self.date.strftime('%Y-%m-%d %H:%M')}')>"
+
+# --- PART 2: Data Class for Analysis Results ---
+@dataclass
+class PriceStats:
+    """A professional Data Class to hold product analysis statistics."""
+    name: str
+    current: float
+    min_price: float
+    avg_price: float
+    max_price: float
+    change_percent: float
+    verdict: str
+
+# --- PART 3: Database Manager (SQLAlchemy) ---
 class PriceDataManager:
-    def __init__(self, db_name="prices.db"):
-        self.db_name = db_name
+    def __init__(self, db_url: str = "sqlite:///kitapyurdu_prices.db"):
+        """Initializes the database connection and creates tables."""
+        self.engine: Engine = create_engine(db_url)
+        self.Session: sessionmaker = sessionmaker(bind=self.engine)
         self.create_table()
 
-    def create_table(self):
-        conn = sqlite3.connect(self.db_name)
-        cursor = conn.cursor()
-        cursor.execute("""
-            CREATE TABLE IF NOT EXISTS prices (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                product_name TEXT NOT NULL,
-                price REAL NOT NULL,
-                date TEXT NOT NULL
+    def create_table(self) -> None:
+        """Creates the 'prices' table if it doesn't exist."""
+        Base.metadata.create_all(self.engine)
+        print("Database initialized and table created.")
+
+    def add_price(self, product_name: str, price: float, date: Optional[datetime] = None) -> None:
+        """Adds a new price entry to the database."""
+        session: Session
+        with self.Session() as session:
+            new_entry = PriceEntry(
+                product_name=product_name, 
+                price=price, 
+                date=date if date is not None else datetime.now()
             )
-        """)
-        conn.commit()
-        conn.close()
+            session.add(new_entry)
+            session.commit()
+            print(f"Saved: {product_name} - {price} TL")
 
-    def add_price(self, product_name, price, date=None):
-        if date is None:
-            date = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        conn = sqlite3.connect(self.db_name)
-        cursor = conn.cursor()
-        cursor.execute("INSERT INTO prices (product_name, price, date) VALUES (?, ?, ?)",
-                       (product_name, price, date))
-        conn.commit()
-        conn.close()
-        print(f"Saved: {product_name} - {price} TL")
+    def get_distinct_products(self) -> List[str]:
+        """Retrieves a list of all distinct product names."""
+        session: Session
+        with self.Session() as session:
+            products: List[str] = session.query(PriceEntry.product_name).distinct().all()
+            return [p[0] for p in products]
 
-    def get_distinct_products(self):
-        conn = sqlite3.connect(self.db_name)
-        cursor = conn.cursor()
-        cursor.execute("SELECT DISTINCT product_name FROM prices")
-        products = [row[0] for row in cursor.fetchall()]
-        conn.close()
-        return products
+    def get_product_history(self, product_name: str) -> List[float]:
+        """Retrieves the price history for a given product, sorted by date."""
+        session: Session
+        with self.Session() as session:
+            history: List[PriceEntry] = session.query(PriceEntry).filter_by(product_name=product_name).order_by(PriceEntry.date).all()
+            return [entry.price for entry in history]
 
-    def get_product_history(self, product_name):
-        conn = sqlite3.connect(self.db_name)
-        cursor = conn.cursor()
-        cursor.execute("SELECT price, date FROM prices WHERE product_name = ? ORDER BY date ASC", (product_name,))
-        data = cursor.fetchall()
-        conn.close()
-        return data
-
-# --- PART 2: Price Analyzer (NEW) ---
+# --- PART 4: Price Analyzer ---
 class PriceAnalyzer:
-    def __init__(self, db_manager):
+    def __init__(self, db_manager: PriceDataManager):
         self.db = db_manager
 
-    def analyze_product(self, product_name):
+    def analyze_product(self, product_name: str) -> Optional[PriceStats]:
         """
         Calculates statistics and gives a buying recommendation.
+        Returns a PriceStats object or None.
         """
-        history = self.db.get_product_history(product_name)
+        prices: List[float] = self.db.get_product_history(product_name)
         
-        if not history:
+        if not prices:
             return None
 
         # Extract prices
-        prices = [row[0] for row in history]
-        current_price = prices[-1]
+        current_price: float = prices[-1]
         
         # Calculate Stats
-        min_price = min(prices)
-        max_price = max(prices)
-        avg_price = statistics.mean(prices)
+        min_price: float = min(prices)
+        max_price: float = max(prices)
+        avg_price: float = statistics.mean(prices)
         
         # Calculate Trend (Current vs Previous)
+        change: float
         if len(prices) > 1:
-            prev_price = prices[-2]
+            prev_price: float = prices[-2]
             change = ((current_price - prev_price) / prev_price) * 100
         else:
             change = 0.0
 
         # Determine Verdict
+        verdict: str
         if current_price <= min_price and len(prices) > 1:
-            verdict = " ALL TIME LOW"
+            verdict = "ALL TIME LOW!"
         elif current_price < avg_price:
-            verdict = " Good Deal"
+            verdict = "Good Deal (Below Average)"
         elif current_price > avg_price:
-            verdict = " High Price"
+            verdict = "High Price (Above Average)"
         else:
-            verdict = " Normal"
+            verdict = "Normal"
 
-        return {
-            "name": product_name,
-            "current": current_price,
-            "min": min_price,
-            "avg": round(avg_price, 2),
-            "max": max_price,
-            "change": round(change, 2),
-            "verdict": verdict
-        }
+        return PriceStats(
+            name=product_name,
+            current=current_price,
+            min_price=min_price,
+            avg_price=round(avg_price, 2),
+            max_price=max_price,
+            change_percent=round(change, 2),
+            verdict=verdict
+        )
 
-    def generate_report(self):
+    def generate_report(self) -> None:
         """
         Generates a table summary for all products.
         """
-        products = self.db.get_distinct_products()
-        report_data = []
-
+        products: List[str] = self.db.get_distinct_products()
+        report_data: List[List[Any]] = []
+        
         for prod in products:
-            stats = self.analyze_product(prod)
+            stats: Optional[PriceStats] = self.analyze_product(prod)
             if stats:
-                # Colorize change (Red for price up, Green for price down)
-                change_str = f"{stats['change']}%"
-                
                 report_data.append([
-                    stats['name'],
-                    f"{stats['current']} TL",
-                    f"{stats['min']} TL",
-                    f"{stats['avg']} TL",
-                    f"{stats['max']} TL",
-                    change_str,
-                    stats['verdict']
+                    stats.name,
+                    f"{stats.current} TL",
+                    f"{stats.min_price} TL",
+                    f"{stats.avg_price} TL",
+                    f"{stats.max_price} TL",
+                    f"{stats.change_percent}%",
+                    stats.verdict
                 ])
 
-        print("\n" + "="*60)
-        print("📊 PRICE ANALYSIS REPORT")
-        print("="*60)
+        print("\n" + "="*80)
+        print("PRICE ANALYSIS REPORT (SQLAlchemy & Data Class)")
+        print("="*80)
         print(tabulate(
             report_data, 
             headers=["Product", "Current", "Min", "Avg", "Max", "Change", "Verdict"], 
             tablefmt="fancy_grid"
         ))
 
-# --- PART 3: Scraper Logic ---
-def get_price_kitapyurdu(url):
+# --- PART 5: Scraper Logic (Type Hinted) ---
+def get_price_kitapyurdu(url: str) -> Optional[float]:
+    """Scrapes the price from a Kitapyurdu URL."""
     try:
-        headers = {
+        headers: Dict[str, str] = {
             "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36"
         }
-        response = requests.get(url, headers=headers)
-        if response.status_code != 200: return None
+        response: requests.Response = requests.get(url, headers=headers, timeout=10)
+        if response.status_code != 200: 
+            return None
         
-        soup = BeautifulSoup(response.content, 'lxml')
+        soup: BeautifulSoup = BeautifulSoup(response.content, 'lxml')
+        # Combined selector to handle different product page structures
         price_element = soup.find('div', class_='price__item') or soup.find('div', class_='pr_price_content')
         
         if price_element:
-            price_text = price_element.get_text(strip=True)
-            numbers = re.findall(r'[\d,]+', price_text)
+            price_text: str = price_element.get_text(strip=True)
+            # Find all numbers, including commas/dots for decimals
+            numbers: List[str] = re.findall(r'[\d,]+', price_text)
             if numbers:
-                return float(''.join(numbers).replace(',', '.'))
+                # Clean and convert to float (e.g., '145,00' -> 145.00)
+                # This assumes Turkish price format where ',' is decimal separator
+                price_str: str = ''.join(numbers).replace(',', '.') 
+                # Find the last number sequence, which is usually the actual price
+                if '.' in price_str:
+                    return float(price_str)
+                else:
+                    return float(numbers[-1].replace(',', '.'))
         return None
-    except Exception:
+    except requests.exceptions.RequestException:
+        print(f"Error connecting to {url}")
+        return None
+    except Exception as e:
+        print(f"An unexpected error occurred during scraping: {e}")
         return None
 
-# --- PART 4: Execution ---
+# --- PART 6: Execution ---
 if __name__ == "__main__":
-    DB_NAME = "kitapyurdu_prices.db"
-    manager = PriceDataManager(DB_NAME)
+    DB_URL = "sqlite:///kitapyurdu_prices.db" # Standard URL for SQLAlchemy SQLite
+    manager = PriceDataManager(DB_URL)
     analyzer = PriceAnalyzer(manager)
 
-    # 1. Simulate Historical Data (ONLY FOR DEMO PURPOSES)
-    # This adds fake past prices so the analyzer has something to compare against.
-    # In real usage, you would remove this function.
-    def seed_fake_history():
-        print(" Seeding fake history for demonstration...")
-        fake_data = [
-            ("Harry Potter 1", 150.00, (datetime.now() - timedelta(days=5)).strftime("%Y-%m-%d %H:%M:%S")),
-            ("Harry Potter 1", 145.00, (datetime.now() - timedelta(days=3)).strftime("%Y-%m-%d %H:%M:%S")),
-            ("Harry Potter 1", 160.00, (datetime.now() - timedelta(days=1)).strftime("%Y-%m-%d %H:%M:%S")),
-        ]
-        conn = sqlite3.connect(DB_NAME)
-        cursor = conn.cursor()
-        # Check if empty to avoid duplicates
-        cursor.execute("SELECT count(*) FROM prices")
-        if cursor.fetchone()[0] == 0:
-            cursor.executemany("INSERT INTO prices (product_name, price, date) VALUES (?, ?, ?)", fake_data)
-            conn.commit()
-        conn.close()
+    # Function to clear and seed fake data (Uses ORM now)
+    def seed_fake_history(session_factory: sessionmaker) -> None:
+        """Seeds fake data using the SQLAlchemy ORM."""
+        session: Session
+        with session_factory() as session:
+            # Clear existing data for a clean demo
+            session.query(PriceEntry).delete()
+            session.commit()
+            print("Seeded data cleared.")
 
-    seed_fake_history()
+            fake_data: List[PriceEntry] = [
+                PriceEntry(
+                    product_name="Harry Potter 1", 
+                    price=150.00, 
+                    date=datetime.now() - timedelta(days=5)
+                ),
+                PriceEntry(
+                    product_name="Harry Potter 1", 
+                    price=145.00, 
+                    date=datetime.now() - timedelta(days=3)
+                ),
+                PriceEntry(
+                    product_name="Harry Potter 1", 
+                    price=160.00, 
+                    date=datetime.now() - timedelta(days=1)
+                ),
+                PriceEntry(
+                    product_name="Python Crash Course", 
+                    price=120.00, 
+                    date=datetime.now() - timedelta(days=2)
+                ),
+            ]
+            session.add_all(fake_data)
+            session.commit()
+            print("Seeding fake history for demonstration successful.")
+
+    seed_fake_history(manager.Session) # Pass the Session factory
 
     # 2. Define Real Products to Track
-    products_to_track = [
+    products_to_track: List[Dict[str, str]] = [
         {"name": "Harry Potter 1", "url": "https://www.kitapyurdu.com/kitap/harry-potter-ve-felsefe-tasi/32780.html"},
-        {"name": "Harry Potter 2", "url": "https://www.kitapyurdu.com/kitap/harry-potter-ve-efsaneler-kitabi/677276.html"}
+        {"name": "Harry Potter 2", "url": "https://www.kitapyurdu.com/kitap/harry-potter-ve-sirlar-odasi-2-kitap/32781.html"},
+        {"name": "Python Crash Course", "url": "https://www.kitapyurdu.com/kitap/python-kullanici-kitabi/677276.html"}
     ]
 
     print(f"\n Scanning {len(products_to_track)} products...")
 
     # 3. Scrape and Save Current Prices
     for product in products_to_track:
-        current_price = get_price_kitapyurdu(product['url'])
-        if current_price:
+        current_price: Optional[float] = get_price_kitapyurdu(product['url'])
+        if current_price is not None:
             manager.add_price(product['name'], current_price)
+        else:
+            print(f"Skipped: Could not fetch price for {product['name']}")
 
     # 4. Analyze and Show Report
     analyzer.generate_report()
