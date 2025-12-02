@@ -1,263 +1,539 @@
-import requests
-from bs4 import BeautifulSoup
-import re
-import statistics
+"""
+PERSON 3: PRICE ANALYZER
+Analyzes price data from Person 2's database
+Detects price drops, trends, and provides recommendations
+"""
+
+from typing import List, Dict, Any, Optional, Tuple
 from datetime import datetime, timedelta
-from tabulate import tabulate
-from typing import List, Optional, Dict, Any
 from dataclasses import dataclass
+from enum import Enum
+import statistics
+import json
+from abc import ABC, abstractmethod
+from typing import Protocol
 
-# --- SQLAlchemy Setup ---
-from sqlalchemy import create_engine, Column, Integer, String, Float, DateTime
-from sqlalchemy.orm import sessionmaker, declarative_base
-from sqlalchemy.engine import Engine
-from sqlalchemy.orm import Session
+# ==================== ENUMS & DATA CLASSES ====================
 
-# Define the Base class for declarative models
-Base = declarative_base()
+class TrendDirection(Enum):
+    """Price trend directions"""
+    UP = "up"
+    DOWN = "down"
+    STABLE = "stable"
+    VOLATILE = "volatile"
 
-# --- PART 1: SQLAlchemy Model ---
-class PriceEntry(Base):
-    """SQLAlchemy ORM model for price data."""
-    __tablename__ = 'prices'
-    
-    id: int = Column(Integer, primary_key=True, autoincrement=True)
-    product_name: str = Column(String, nullable=False)
-    price: float = Column(Float, nullable=False)
-    date: datetime = Column(DateTime, nullable=False, default=datetime.now)
+class AlertLevel(Enum):
+    """Price alert levels"""
+    CRITICAL_DROP = "critical_drop"  # >20% drop
+    GOOD_DEAL = "good_deal"          # >10% drop
+    FAIR_PRICE = "fair_price"        # Within ±5%
+    HIGH_PRICE = "high_price"        >10% increase
+    WARNING = "warning"              # Anomaly detected
 
-    def __repr__(self) -> str:
-        return f"<PriceEntry(name='{self.product_name}', price={self.price}, date='{self.date.strftime('%Y-%m-%d %H:%M')}')>"
-
-# --- PART 2: Data Class for Analysis Results ---
 @dataclass
-class PriceStats:
-    """A professional Data Class to hold product analysis statistics."""
-    name: str
-    current: float
-    min_price: float
-    avg_price: float
-    max_price: float
-    change_percent: float
-    verdict: str
-
-# --- PART 3: Database Manager (SQLAlchemy) ---
-class PriceDataManager:
-    def __init__(self, db_url: str = "sqlite:///kitapyurdu_prices.db"):
-        """Initializes the database connection and creates tables."""
-        self.engine: Engine = create_engine(db_url)
-        self.Session: sessionmaker = sessionmaker(bind=self.engine)
-        self.create_table()
-
-    def create_table(self) -> None:
-        """Creates the 'prices' table if it doesn't exist."""
-        Base.metadata.create_all(self.engine)
-        print("Database initialized and table created.")
-
-    def add_price(self, product_name: str, price: float, date: Optional[datetime] = None) -> None:
-        """Adds a new price entry to the database."""
-        session: Session
-        with self.Session() as session:
-            new_entry = PriceEntry(
-                product_name=product_name, 
-                price=price, 
-                date=date if date is not None else datetime.now()
-            )
-            session.add(new_entry)
-            session.commit()
-            print(f"Saved: {product_name} - {price} TL")
-
-    def get_distinct_products(self) -> List[str]:
-        """Retrieves a list of all distinct product names."""
-        session: Session
-        with self.Session() as session:
-            products: List[str] = session.query(PriceEntry.product_name).distinct().all()
-            return [p[0] for p in products]
-
-    def get_product_history(self, product_name: str) -> List[float]:
-        """Retrieves the price history for a given product, sorted by date."""
-        session: Session
-        with self.Session() as session:
-            history: List[PriceEntry] = session.query(PriceEntry).filter_by(product_name=product_name).order_by(PriceEntry.date).all()
-            return [entry.price for entry in history]
-
-# --- PART 4: Price Analyzer ---
-class PriceAnalyzer:
-    def __init__(self, db_manager: PriceDataManager):
-        self.db = db_manager
-
-    def analyze_product(self, product_name: str) -> Optional[PriceStats]:
-        """
-        Calculates statistics and gives a buying recommendation.
-        Returns a PriceStats object or None.
-        """
-        prices: List[float] = self.db.get_product_history(product_name)
-        
-        if not prices:
-            return None
-
-        # Extract prices
-        current_price: float = prices[-1]
-        
-        # Calculate Stats
-        min_price: float = min(prices)
-        max_price: float = max(prices)
-        avg_price: float = statistics.mean(prices)
-        
-        # Calculate Trend (Current vs Previous)
-        change: float
-        if len(prices) > 1:
-            prev_price: float = prices[-2]
-            change = ((current_price - prev_price) / prev_price) * 100
-        else:
-            change = 0.0
-
-        # Determine Verdict
-        verdict: str
-        if current_price <= min_price and len(prices) > 1:
-            verdict = "ALL TIME LOW!"
-        elif current_price < avg_price:
-            verdict = "Good Deal (Below Average)"
-        elif current_price > avg_price:
-            verdict = "High Price (Above Average)"
-        else:
-            verdict = "Normal"
-
-        return PriceStats(
-            name=product_name,
-            current=current_price,
-            min_price=min_price,
-            avg_price=round(avg_price, 2),
-            max_price=max_price,
-            change_percent=round(change, 2),
-            verdict=verdict
-        )
-
-    def generate_report(self) -> None:
-        """
-        Generates a table summary for all products.
-        """
-        products: List[str] = self.db.get_distinct_products()
-        report_data: List[List[Any]] = []
-        
-        for prod in products:
-            stats: Optional[PriceStats] = self.analyze_product(prod)
-            if stats:
-                report_data.append([
-                    stats.name,
-                    f"{stats.current} TL",
-                    f"{stats.min_price} TL",
-                    f"{stats.avg_price} TL",
-                    f"{stats.max_price} TL",
-                    f"{stats.change_percent}%",
-                    stats.verdict
-                ])
-
-        print("\n" + "="*80)
-        print("PRICE ANALYSIS REPORT (SQLAlchemy & Data Class)")
-        print("="*80)
-        print(tabulate(
-            report_data, 
-            headers=["Product", "Current", "Min", "Avg", "Max", "Change", "Verdict"], 
-            tablefmt="fancy_grid"
-        ))
-
-# --- PART 5: Scraper Logic (Type Hinted) ---
-def get_price_kitapyurdu(url: str) -> Optional[float]:
-    """Scrapes the price from a Kitapyurdu URL."""
-    try:
-        headers: Dict[str, str] = {
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36"
+class PriceAnalysis:
+    """Data class for price analysis results"""
+    product_name: str
+    product_id: str
+    site: str
+    current_price: float
+    previous_price: float
+    average_price: float
+    minimum_price: float
+    maximum_price: float
+    price_change_percent: float
+    price_change_amount: float
+    trend_direction: TrendDirection
+    alert_level: AlertLevel
+    recommendation: str
+    confidence_score: float
+    analysis_date: datetime
+    data_points_count: int
+    
+    def to_dict(self) -> Dict[str, Any]:
+        """Convert to dictionary for JSON serialization"""
+        return {
+            "product_name": self.product_name,
+            "product_id": self.product_id,
+            "site": self.site,
+            "current_price": self.current_price,
+            "previous_price": self.previous_price,
+            "average_price": round(self.average_price, 2),
+            "minimum_price": self.minimum_price,
+            "maximum_price": self.maximum_price,
+            "price_change_percent": round(self.price_change_percent, 2),
+            "price_change_amount": round(self.price_change_amount, 2),
+            "trend_direction": self.trend_direction.value,
+            "alert_level": self.alert_level.value,
+            "recommendation": self.recommendation,
+            "confidence_score": round(self.confidence_score, 2),
+            "analysis_date": self.analysis_date.isoformat(),
+            "data_points_count": self.data_points_count
         }
-        response: requests.Response = requests.get(url, headers=headers, timeout=10)
-        if response.status_code != 200: 
+
+# ==================== ABSTRACT CLASSES & PROTOCOLS ====================
+
+class DataSource(Protocol):
+    """Protocol for data sources"""
+    def get_price_history(self, product_id: str, days: int = 30) -> List[float]:
+        """Get price history for a product"""
+        ...
+    
+    def get_product_info(self, product_id: str) -> Optional[Dict[str, Any]]:
+        """Get product information"""
+        ...
+
+class AnalysisStrategy(ABC):
+    """Abstract base class for analysis strategies"""
+    
+    @abstractmethod
+    def analyze(self, prices: List[float]) -> Tuple[TrendDirection, float]:
+        """Analyze price list and return trend with confidence"""
+        pass
+    
+    @abstractmethod
+    def get_name(self) -> str:
+        """Get strategy name"""
+        pass
+
+# ==================== ANALYSIS STRATEGIES ====================
+
+class MovingAverageStrategy(AnalysisStrategy):
+    """Moving average based analysis"""
+    
+    def __init__(self, short_window: int = 5, long_window: int = 20):
+        self.short_window = short_window
+        self.long_window = long_window
+    
+    def analyze(self, prices: List[float]) -> Tuple[TrendDirection, float]:
+        if len(prices) < self.long_window:
+            return TrendDirection.STABLE, 0.5
+        
+        short_ma = statistics.mean(prices[-self.short_window:])
+        long_ma = statistics.mean(prices[-self.long_window:])
+        
+        if short_ma > long_ma * 1.05:
+            return TrendDirection.UP, 0.8
+        elif short_ma < long_ma * 0.95:
+            return TrendDirection.DOWN, 0.8
+        else:
+            return TrendDirection.STABLE, 0.6
+    
+    def get_name(self) -> str:
+        return f"MovingAverage({self.short_window},{self.long_window})"
+
+class PercentageChangeStrategy(AnalysisStrategy):
+    """Percentage change based analysis"""
+    
+    def __init__(self, threshold_percent: float = 5.0):
+        self.threshold = threshold_percent
+    
+    def analyze(self, prices: List[float]) -> Tuple[TrendDirection, float]:
+        if len(prices) < 2:
+            return TrendDirection.STABLE, 0.3
+        
+        current = prices[-1]
+        previous = prices[-2]
+        change_percent = ((current - previous) / previous) * 100
+        
+        if abs(change_percent) < self.threshold:
+            return TrendDirection.STABLE, 0.7
+        elif change_percent > 0:
+            return TrendDirection.UP, min(0.9, abs(change_percent) / 50)
+        else:
+            return TrendDirection.DOWN, min(0.9, abs(change_percent) / 50)
+    
+    def get_name(self) -> str:
+        return f"PercentageChange({self.threshold}%)"
+
+class VolatilityStrategy(AnalysisStrategy):
+    """Volatility based analysis"""
+    
+    def __init__(self, volatility_threshold: float = 0.1):
+        self.threshold = volatility_threshold
+    
+    def analyze(self, prices: List[float]) -> Tuple[TrendDirection, float]:
+        if len(prices) < 10:
+            return TrendDirection.STABLE, 0.4
+        
+        returns = [(prices[i] - prices[i-1]) / prices[i-1] 
+                  for i in range(1, len(prices))]
+        
+        if len(returns) > 0:
+            volatility = statistics.stdev(returns)
+            if volatility > self.threshold:
+                return TrendDirection.VOLATILE, min(0.85, volatility)
+        
+        return TrendDirection.STABLE, 0.7
+    
+    def get_name(self) -> str:
+        return f"VolatilityStrategy({self.threshold})"
+
+# ==================== DATABASE ADAPTER ====================
+# Connects to Person 2's database
+
+class DatabaseAdapter:
+    """Adapter to connect with Person 2's database"""
+    
+    def __init__(self, database_type: str = "PostgreSQL"):
+        self.database_type = database_type
+        
+    def connect(self):
+        """Connect to database"""
+        # This should match Person 2's database setup
+        # For now, we'll use a mock connection
+        print(f"Connected to {self.database_type} database")
+        return True
+    
+    def get_price_history_from_db(self, product_id: str, days: int = 30) -> List[float]:
+        """
+        Get price history from Person 2's database
+        In real implementation, this would query the actual database
+        """
+        # Mock data for demonstration
+        # Real implementation would use SQLAlchemy or PyMongo
+        import random
+        
+        base_price = random.uniform(50, 500)
+        history = []
+        
+        for i in range(days):
+            variation = random.uniform(-0.1, 0.1)  # ±10% variation
+            price = base_price * (1 + variation)
+            history.append(round(price, 2))
+        
+        return history
+    
+    def get_product_info_from_db(self, product_id: str) -> Optional[Dict[str, Any]]:
+        """Get product information from database"""
+        # Mock data
+        products = {
+            "32780": {
+                "name": "Harry Potter ve Felsefe Taşı",
+                "site": "kitapyurdu",
+                "url": "https://www.kitapyurdu.com/kitap/harry-potter-ve-felsefe-tasi/32780.html",
+                "category": "Books"
+            },
+            "HBC00004E3WIR": {
+                "name": "Apple iPhone 15",
+                "site": "hepsiburada",
+                "url": "https://www.hepsiburada.com/apple-iphone-15-128-gb-pm-HBC00004E3WIR",
+                "category": "Electronics"
+            }
+        }
+        
+        return products.get(product_id)
+
+# ==================== PRICE ANALYZER MAIN CLASS ====================
+
+class PriceAnalyzer:
+    """
+    Main analyzer class for Person 3
+    Compares current vs historical prices and provides insights
+    """
+    
+    def __init__(self, database_adapter: DatabaseAdapter):
+        self.db = database_adapter
+        self.strategies: List[AnalysisStrategy] = [
+            MovingAverageStrategy(),
+            PercentageChangeStrategy(threshold_percent=5.0),
+            VolatilityStrategy(volatility_threshold=0.08)
+        ]
+    
+    def analyze_product(self, product_id: str) -> Optional[PriceAnalysis]:
+        """
+        Analyze a product and return detailed analysis
+        """
+        # Get price history from Person 2's database
+        price_history = self.db.get_price_history_from_db(product_id, days=30)
+        
+        if not price_history or len(price_history) < 2:
+            print(f"Insufficient data for product {product_id}")
             return None
         
-        soup: BeautifulSoup = BeautifulSoup(response.content, 'lxml')
-        # Combined selector to handle different product page structures
-        price_element = soup.find('div', class_='price__item') or soup.find('div', class_='pr_price_content')
+        # Get product info
+        product_info = self.db.get_product_info_from_db(product_id)
+        if not product_info:
+            print(f"Product info not found for {product_id}")
+            return None
         
-        if price_element:
-            price_text: str = price_element.get_text(strip=True)
-            # Find all numbers, including commas/dots for decimals
-            numbers: List[str] = re.findall(r'[\d,]+', price_text)
-            if numbers:
-                # Clean and convert to float (e.g., '145,00' -> 145.00)
-                # This assumes Turkish price format where ',' is decimal separator
-                price_str: str = ''.join(numbers).replace(',', '.') 
-                # Find the last number sequence, which is usually the actual price
-                if '.' in price_str:
-                    return float(price_str)
-                else:
-                    return float(numbers[-1].replace(',', '.'))
-        return None
-    except requests.exceptions.RequestException:
-        print(f"Error connecting to {url}")
-        return None
-    except Exception as e:
-        print(f"An unexpected error occurred during scraping: {e}")
-        return None
-
-# --- PART 6: Execution ---
-if __name__ == "__main__":
-    DB_URL = "sqlite:///kitapyurdu_prices.db" # Standard URL for SQLAlchemy SQLite
-    manager = PriceDataManager(DB_URL)
-    analyzer = PriceAnalyzer(manager)
-
-    # Function to clear and seed fake data (Uses ORM now)
-    def seed_fake_history(session_factory: sessionmaker) -> None:
-        """Seeds fake data using the SQLAlchemy ORM."""
-        session: Session
-        with session_factory() as session:
-            # Clear existing data for a clean demo
-            session.query(PriceEntry).delete()
-            session.commit()
-            print("Seeded data cleared.")
-
-            fake_data: List[PriceEntry] = [
-                PriceEntry(
-                    product_name="Harry Potter 1", 
-                    price=150.00, 
-                    date=datetime.now() - timedelta(days=5)
-                ),
-                PriceEntry(
-                    product_name="Harry Potter 1", 
-                    price=145.00, 
-                    date=datetime.now() - timedelta(days=3)
-                ),
-                PriceEntry(
-                    product_name="Harry Potter 1", 
-                    price=160.00, 
-                    date=datetime.now() - timedelta(days=1)
-                ),
-                PriceEntry(
-                    product_name="Python Crash Course", 
-                    price=120.00, 
-                    date=datetime.now() - timedelta(days=2)
-                ),
-            ]
-            session.add_all(fake_data)
-            session.commit()
-            print("Seeding fake history for demonstration successful.")
-
-    seed_fake_history(manager.Session) # Pass the Session factory
-
-    # 2. Define Real Products to Track
-    products_to_track: List[Dict[str, str]] = [
-        {"name": "Harry Potter 1", "url": "https://www.kitapyurdu.com/kitap/harry-potter-ve-felsefe-tasi/32780.html"},
-        {"name": "Harry Potter 2", "url": "https://www.kitapyurdu.com/kitap/harry-potter-ve-sirlar-odasi-2-kitap/32781.html"},
-        {"name": "Python Crash Course", "url": "https://www.kitapyurdu.com/kitap/python-kullanici-kitabi/677276.html"}
-    ]
-
-    print(f"\n Scanning {len(products_to_track)} products...")
-
-    # 3. Scrape and Save Current Prices
-    for product in products_to_track:
-        current_price: Optional[float] = get_price_kitapyurdu(product['url'])
-        if current_price is not None:
-            manager.add_price(product['name'], current_price)
+        # Calculate basic statistics
+        current_price = price_history[-1]
+        previous_price = price_history[-2] if len(price_history) > 1 else current_price
+        average_price = statistics.mean(price_history)
+        minimum_price = min(price_history)
+        maximum_price = max(price_history)
+        
+        # Calculate changes
+        price_change_amount = current_price - previous_price
+        price_change_percent = (price_change_amount / previous_price) * 100 if previous_price > 0 else 0
+        
+        # Run analysis strategies
+        trend_results = []
+        confidence_scores = []
+        
+        for strategy in self.strategies:
+            trend, confidence = strategy.analyze(price_history)
+            trend_results.append(trend)
+            confidence_scores.append(confidence)
+        
+        # Determine overall trend (majority vote)
+        trend_counts = {trend: 0 for trend in TrendDirection}
+        for trend in trend_results:
+            trend_counts[trend] += 1
+        
+        overall_trend = max(trend_counts, key=trend_counts.get)
+        avg_confidence = statistics.mean(confidence_scores) if confidence_scores else 0.5
+        
+        # Determine alert level
+        alert_level = self._determine_alert_level(
+            price_change_percent, 
+            current_price, 
+            average_price
+        )
+        
+        # Generate recommendation
+        recommendation = self._generate_recommendation(
+            alert_level, 
+            price_change_percent, 
+            current_price, 
+            average_price
+        )
+        
+        # Create analysis result
+        analysis = PriceAnalysis(
+            product_name=product_info["name"],
+            product_id=product_id,
+            site=product_info["site"],
+            current_price=current_price,
+            previous_price=previous_price,
+            average_price=average_price,
+            minimum_price=minimum_price,
+            maximum_price=maximum_price,
+            price_change_percent=price_change_percent,
+            price_change_amount=price_change_amount,
+            trend_direction=overall_trend,
+            alert_level=alert_level,
+            recommendation=recommendation,
+            confidence_score=avg_confidence,
+            analysis_date=datetime.now(),
+            data_points_count=len(price_history)
+        )
+        
+        return analysis
+    
+    def _determine_alert_level(self, change_percent: float, 
+                              current_price: float, 
+                              average_price: float) -> AlertLevel:
+        """Determine alert level based on price changes"""
+        
+        # Critical drop: more than 20% decrease
+        if change_percent <= -20:
+            return AlertLevel.CRITICAL_DROP
+        
+        # Good deal: 10-20% decrease or below average price
+        elif change_percent <= -10 or current_price < average_price * 0.9:
+            return AlertLevel.GOOD_DEAL
+        
+        # High price: more than 10% increase or above average
+        elif change_percent >= 10 or current_price > average_price * 1.1:
+            return AlertLevel.HIGH_PRICE
+        
+        # Fair price: within reasonable range
+        elif abs(change_percent) <= 5 and abs(current_price - average_price) / average_price <= 0.05:
+            return AlertLevel.FAIR_PRICE
+        
+        # Warning: unusual but not extreme
         else:
-            print(f"Skipped: Could not fetch price for {product['name']}")
+            return AlertLevel.WARNING
+    
+    def _generate_recommendation(self, alert_level: AlertLevel,
+                               change_percent: float,
+                               current_price: float,
+                               average_price: float) -> str:
+        """Generate recommendation based on analysis"""
+        
+        recommendations = {
+            AlertLevel.CRITICAL_DROP: f"PRICE DROP ALERT! Price decreased by {abs(change_percent):.1f}%. Best time to buy!",
+            AlertLevel.GOOD_DEAL: f"Good deal! Price is {abs(change_percent):.1f}% lower than before. Consider buying.",
+            AlertLevel.FAIR_PRICE: f"Fair price. Current price is close to average ({current_price:.2f} vs avg {average_price:.2f}).",
+            AlertLevel.HIGH_PRICE: f"Price is high! Increased by {change_percent:.1f}%. Wait for a better deal.",
+            AlertLevel.WARNING: f"🔍 Price is unusual. Monitor for better opportunities."
+        }
+        
+        return recommendations.get(alert_level, "No recommendation available.")
+    
+    def compare_prices(self, product_id_1: str, product_id_2: str) -> Dict[str, Any]:
+        """Compare prices between two products"""
+        analysis_1 = self.analyze_product(product_id_1)
+        analysis_2 = self.analyze_product(product_id_2)
+        
+        if not analysis_1 or not analysis_2:
+            return {"error": "Could not analyze one or both products"}
+        
+        # Calculate price difference
+        price_diff = analysis_1.current_price - analysis_2.current_price
+        price_diff_percent = (price_diff / analysis_2.current_price) * 100
+        
+        # Determine which is better deal
+        better_deal = analysis_1.product_name if analysis_1.alert_level.value in ["critical_drop", "good_deal"] else analysis_2.product_name
+        
+        return {
+            "product_1": analysis_1.to_dict(),
+            "product_2": analysis_2.to_dict(),
+            "price_difference": round(price_diff, 2),
+            "price_difference_percent": round(price_diff_percent, 2),
+            "better_deal": better_deal,
+            "comparison_date": datetime.now().isoformat()
+        }
+    
+    def detect_trends(self, product_ids: List[str], days: int = 7) -> Dict[str, Any]:
+        """Detect trends across multiple products"""
+        all_analyses = []
+        
+        for product_id in product_ids:
+            analysis = self.analyze_product(product_id)
+            if analysis:
+                all_analyses.append(analysis)
+        
+        if not all_analyses:
+            return {"error": "No valid analyses found"}
+        
+        # Calculate overall market trends
+        price_changes = [a.price_change_percent for a in all_analyses]
+        avg_change = statistics.mean(price_changes)
+        
+        # Count trends
+        trend_counts = {trend.value: 0 for trend in TrendDirection}
+        for analysis in all_analyses:
+            trend_counts[analysis.trend_direction.value] += 1
+        
+        # Find most common alert level
+        alert_counts = {alert.value: 0 for alert in AlertLevel}
+        for analysis in all_analyses:
+            alert_counts[analysis.alert_level.value] += 1
+        
+        dominant_trend = max(trend_counts, key=trend_counts.get)
+        dominant_alert = max(alert_counts, key=alert_counts.get)
+        
+        return {
+            "total_products_analyzed": len(all_analyses),
+            "average_price_change": round(avg_change, 2),
+            "dominant_trend": dominant_trend,
+            "dominant_alert": dominant_alert,
+            "trend_distribution": trend_counts,
+            "alert_distribution": alert_counts,
+            "analyses": [a.to_dict() for a in all_analyses],
+            "analysis_date": datetime.now().isoformat()
+        }
 
-    # 4. Analyze and Show Report
-    analyzer.generate_report()
+# ==================== VISUALIZATION HELPER ====================
+# For Person 5 to use
+
+class AnalysisVisualizer:
+    """Helper class to prepare data for visualization"""
+    
+    @staticmethod
+    def prepare_chart_data(analysis: PriceAnalysis) -> Dict[str, Any]:
+        """Prepare data for charts"""
+        return {
+            "labels": ["Current", "Average", "Min", "Max"],
+            "data": [
+                analysis.current_price,
+                analysis.average_price,
+                analysis.minimum_price,
+                analysis.maximum_price
+            ],
+            "colors": ["#4CAF50", "#2196F3", "#FF9800", "#F44336"],
+            "title": f"Price Analysis: {analysis.product_name}"
+        }
+    
+    @staticmethod
+    def prepare_trend_data(price_history: List[float]) -> Dict[str, Any]:
+        """Prepare data for trend line chart"""
+        dates = [(datetime.now() - timedelta(days=len(price_history)-i)).strftime("%Y-%m-%d")
+                for i in range(len(price_history))]
+        
+        return {
+            "dates": dates,
+            "prices": price_history,
+            "title": "Price History Trend"
+        }
+
+# ==================== MAIN EXECUTION ====================
+
+if __name__ == "__main__":
+    print("=" * 60)
+    print("PERSON 3: PRICE ANALYZER")
+    print("Analyzing price data from Person 2's database")
+    print("=" * 60)
+    
+    # Initialize database adapter (connects to Person 2's database)
+    db_adapter = DatabaseAdapter(database_type="PostgreSQL")
+    db_adapter.connect()
+    
+    # Initialize analyzer
+    analyzer = PriceAnalyzer(db_adapter)
+    
+    # Example: Analyze specific products
+    print("\nAnalyzing individual products...")
+    
+    # Analyze Harry Potter book
+    hp_analysis = analyzer.analyze_product("32780")
+    if hp_analysis:
+        print(f"\nAnalysis for {hp_analysis.product_name}:")
+        print(f"   Current Price: {hp_analysis.current_price} TL")
+        print(f"   Change: {hp_analysis.price_change_percent:.1f}%")
+        print(f"   Trend: {hp_analysis.trend_direction.value}")
+        print(f"   Alert: {hp_analysis.alert_level.value}")
+        print(f"   Recommendation: {hp_analysis.recommendation}")
+        
+        # Save analysis to JSON for Person 4/5
+        with open("price_analysis_hp.json", "w", encoding="utf-8") as f:
+            json.dump(hp_analysis.to_dict(), f, indent=2, ensure_ascii=False)
+        print(" Analysis saved to price_analysis_hp.json")
+    
+    # Analyze iPhone
+    iphone_analysis = analyzer.analyze_product("HBC00004E3WIR")
+    if iphone_analysis:
+        print(f"\nAnalysis for {iphone_analysis.product_name}:")
+        print(f"   Current Price: {iphone_analysis.current_price} TL")
+        print(f"   Change: {iphone_analysis.price_change_percent:.1f}%")
+        print(f"   Trend: {iphone_analysis.trend_direction.value}")
+        print(f"   Recommendation: {iphone_analysis.recommendation}")
+    
+    # Example: Compare two products
+    print("\nComparing products...")
+    comparison = analyzer.compare_prices("32780", "HBC00004E3WIR")
+    if "error" not in comparison:
+        print(f"   Better deal: {comparison['better_deal']}")
+        print(f"   Price difference: {comparison['price_difference_percent']:.1f}%")
+    
+    # Example: Detect overall trends
+    print("\nDetecting market trends...")
+    all_products = ["32780", "HBC00004E3WIR"]
+    trends = analyzer.detect_trends(all_products)
+    
+    if "error" not in trends:
+        print(f"   Products analyzed: {trends['total_products_analyzed']}")
+        print(f"   Average price change: {trends['average_price_change']}%")
+        print(f"   Dominant trend: {trends['dominant_trend']}")
+        print(f"   Dominant alert: {trends['dominant_alert']}")
+    
+    # Prepare data for Person 5 (Visualizer)
+    print("\nPreparing visualization data...")
+    if hp_analysis:
+        chart_data = AnalysisVisualizer.prepare_chart_data(hp_analysis)
+        print(f"   Chart data prepared for: {chart_data['title']}")
+        
+        # Save visualization data
+        with open("visualization_data.json", "w", encoding="utf-8") as f:
+            json.dump(chart_data, f, indent=2, ensure_ascii=False)
+        print("Visualization data saved to visualization_data.json")
+    
+    print("\n" + "=" * 60)
+    print("Person 3 analysis completed!")
+    print("Output files created:")
+    print("   - price_analysis_hp.json (for Person 4 alerts)")
+    print("   - visualization_data.json (for Person 5 charts)")
+    print("=" * 60)
