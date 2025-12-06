@@ -14,7 +14,7 @@ Base = declarative_base()
 
 # Database Models
 class Product(Base):
-    _tablename_ = 'products'
+    __tablename__ = 'products'
     
     id = Column(Integer, primary_key=True, autoincrement=True)
     product_id = Column(String(100), unique=True)
@@ -26,7 +26,7 @@ class Product(Base):
     created_at = Column(DateTime, default=datetime.now)
 
 class PriceHistory(Base):
-    _tablename_ = 'price_history'
+    __tablename__ = 'price_history'
     
     id = Column(Integer, primary_key=True, autoincrement=True)
     product_id = Column(String(100), nullable=False)
@@ -44,7 +44,7 @@ class PriceDataManager:
     Receives price data from Person 1 and stores in database
     """
     
-    def _init_(self, database_type="PostgreSQL", database_name="price_tracker"):
+    def __init__(self, database_type="PostgreSQL", database_name="price_tracker"):
         self.database_type = database_type
         self.database_name = database_name
         
@@ -321,7 +321,7 @@ class PriceDataManager:
             }
 
 # Example usage
-if _name_ == "_main_":
+if __name__ == "__main__":
     # Use PostgreSQL for better performance
     manager = PriceDataManager(database_type="PostgreSQL")
     
