@@ -2,6 +2,7 @@
 PRICE COLLECTOR - Person 1
 Supports: KitapYurdu, Hepsiburada, Amazon.com.tr
 Features: Multi-site, OOP, ItemLoader, Pipelines, Error Handling
+Multi-site price extraction with advanced architecture
 """
 
 import scrapy
@@ -10,145 +11,327 @@ import re
 import json
 import argparse
 from datetime import datetime
+from typing import List, Optional, Dict, Any, ClassVar
+from dataclasses import dataclass, field, asdict
+from abc import ABC, abstractmethod
+from enum import Enum
 from scrapy.crawler import CrawlerProcess
 from scrapy.loader import ItemLoader
 from scrapy.item import Item, Field
-from itemloaders.processors import TakeFirst, MapCompose, Join
+from itemloaders.processors import TakeFirst, MapCompose
 from urllib.parse import urlparse
-from typing import Optional, List, Dict, Any
+import sqlalchemy as sa
+from sqlalchemy.ext.declarative import declarative_base
+from sqlalchemy.orm import sessionmaker
+from typing_extensions import Protocol
 
 # ============================================
-# HELPER FUNCTIONS
+# DATA MODELS
 # ============================================
 
-def clean_price(value: str) -> Optional[float]:
-    """Extract numeric price from text"""
-    if not value:
-        return None
+@dataclass
+class ProductInfo:
+    """Data model for product information"""
+    name: str
+    current_price: float
+    original_price: Optional[float] = None
+    url: str = ""
+    site: str = ""
+    currency: str = "TRY"
+    stock_status: str = "Unknown"
+    product_id: Optional[str] = None
+    timestamp: datetime = field(default_factory=datetime.now)
+    image_url: Optional[str] = None
+    category: Optional[str] = None
     
-    # Find all numbers and decimal points
-    numbers = re.findall(r'[\d,\.]+', str(value))
-    if numbers:
-        # Take the first number sequence
-        price_str = numbers[0].replace(',', '.')
-        
-        # Remove any extra dots except the decimal
-        parts = price_str.split('.')
-        if len(parts) > 2:
-            price_str = parts[0] + '.' + ''.join(parts[1:])
-        
-        try:
-            return float(price_str)
-        except ValueError:
-            return None
-    return None
-
-def clean_text(value: str) -> str:
-    """Clean and normalize text"""
-    if value:
-        return ' '.join(str(value).strip().split())
-    return value
-
-def detect_site_from_url(url: str) -> Optional[str]:
-    """Detect which site a URL belongs to"""
-    domain = urlparse(url).netloc.lower()
+    def to_dict(self) -> Dict[str, Any]:
+        """Convert to dictionary for JSON serialization"""
+        data = asdict(self)
+        data['timestamp'] = self.timestamp.isoformat()
+        return {k: v for k, v in data.items() if v is not None}
     
-    site_patterns = {
-        'kitapyurdu': ['kitapyurdu.com'],
-        'hepsiburada': ['hepsiburada.com'],
-        'amazon': ['amazon.com.tr', 'amazon.tr']
-    }
+    @classmethod
+    def from_dict(cls, data: Dict[str, Any]) -> 'ProductInfo':
+        """Create from dictionary"""
+        if 'timestamp' in data and isinstance(data['timestamp'], str):
+            data['timestamp'] = datetime.fromisoformat(data['timestamp'])
+        return cls(**{k: v for k, v in data.items() if k in cls.__annotations__})
+
+class Currency(Enum):
+    """Supported currency types"""
+    TRY = "TRY"
+    USD = "USD"
+    EUR = "EUR"
+    GBP = "GBP"
+
+class StockStatus(Enum):
+    """Product stock status"""
+    IN_STOCK = "In Stock"
+    OUT_OF_STOCK = "Out of Stock"
+    PRE_ORDER = "Pre-Order"
+    LIMITED = "Limited Stock"
+
+# ============================================
+# INTERFACES
+# ============================================
+
+class PriceCollector(Protocol):
+    """Interface for price collectors"""
     
-    for site, patterns in site_patterns.items():
-        for pattern in patterns:
-            if pattern in domain:
-                return site
-    return None
-
-# ============================================
-# SCRAPY ITEM DEFINITION
-# ============================================
-
-class PriceItem(Item):
-    """Scrapy Item for structured price data"""
-    product_id = Field(output_processor=TakeFirst())
-    product_name = Field(
-        input_processor=MapCompose(clean_text),
-        output_processor=TakeFirst()
-    )
-    url = Field(output_processor=TakeFirst())
-    current_price = Field(
-        input_processor=MapCompose(clean_price),
-        output_processor=TakeFirst()
-    )
-    original_price = Field(
-        input_processor=MapCompose(clean_price),
-        output_processor=TakeFirst()
-    )
-    currency = Field(output_processor=TakeFirst())
-    stock_status = Field(output_processor=TakeFirst())
-    site = Field(output_processor=TakeFirst())
-    category = Field(output_processor=TakeFirst())
-    timestamp = Field(output_processor=TakeFirst())
-    image_url = Field(output_processor=TakeFirst())
-
-# ============================================
-# ABSTRACT BASE SPIDER
-# ============================================
-
-class BasePriceSpider(scrapy.Spider):
-    """Abstract base spider for all price collectors"""
+    def collect_prices(self, urls: List[str]) -> List[ProductInfo]:
+        """Collect prices from given URLs"""
+        ...
     
-    name = None  # Must be defined in child classes
+    def get_site_name(self) -> str:
+        """Get name of the site"""
+        ...
+    
+    def get_default_urls(self) -> List[str]:
+        """Get default URLs for this site"""
+        ...
+
+class PriceValidator(Protocol):
+    """Interface for price validation"""
+    
+    def validate_price(self, price_info: ProductInfo) -> bool:
+        """Validate price information"""
+        ...
+    
+    def normalize_price(self, price_text: str) -> Optional[float]:
+        """Normalize price text to float"""
+        ...
+
+# ============================================
+# CORE COMPONENTS
+# ============================================
+
+class BasePriceSpider(scrapy.Spider, ABC):
+    """Base spider for all price collectors"""
+    
+    name: ClassVar[str]
+    allowed_domains: ClassVar[List[str]] = []
     
     custom_settings = {
         'ROBOTSTXT_OBEY': True,
-        'DOWNLOAD_DELAY': 1,
+        'DOWNLOAD_DELAY': 1.0,
         'CONCURRENT_REQUESTS_PER_DOMAIN': 1,
         'AUTOTHROTTLE_ENABLED': True,
-        'AUTOTHROTTLE_START_DELAY': 1,
-        'AUTOTHROTTLE_MAX_DELAY': 5,
+        'AUTOTHROTTLE_START_DELAY': 1.0,
+        'AUTOTHROTTLE_MAX_DELAY': 5.0,
         'HTTPCACHE_ENABLED': False,
         'DEFAULT_REQUEST_HEADERS': {
             'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
             'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
             'Accept-Language': 'en-US,en;q=0.5',
-            'Accept-Encoding': 'gzip, deflate',
-            'Connection': 'keep-alive',
-            'Upgrade-Insecure-Requests': '1'
         }
     }
     
     def __init__(self, urls: Optional[List[str]] = None, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self.start_urls = urls if urls else self.get_default_urls()
+        self._collected_items: List[ProductInfo] = []
     
+    @abstractmethod
     def get_default_urls(self) -> List[str]:
-        """Return default URLs to scrape - must be implemented by child"""
-        raise NotImplementedError
+        """Get default URLs to scrape"""
+        ...
     
-    def parse(self, response):
-        """Main parse method - must be implemented by child"""
-        raise NotImplementedError
+    @abstractmethod
+    def parse_product_page(self, response: scrapy.http.Response) -> ProductInfo:
+        """Parse product page and extract information"""
+        ...
     
-    def extract_with_selectors(self, response, selectors: List[str], default: Any = None) -> Any:
-        """Try multiple CSS selectors for robustness"""
-        for selector in selectors:
-            value = response.css(selector).get()
-            if value:
-                cleaned = value.strip()
-                if cleaned:  # Check if not empty after strip
-                    return cleaned
-        return default
+    def parse(self, response: scrapy.http.Response):
+        """Main parsing method"""
+        try:
+            product_info = self.parse_product_page(response)
+            if self._validate_product_info(product_info):
+                self._collected_items.append(product_info)
+                yield self._create_scrapy_item(product_info)
+        except Exception as e:
+            self.logger.error(f"Error parsing {response.url}: {e}")
+    
+    def collect_prices(self, urls: List[str]) -> List[ProductInfo]:
+        """Collect prices from URLs"""
+        self.start_urls = urls
+        return []
+    
+    def get_site_name(self) -> str:
+        return self.name
+    
+    def _validate_product_info(self, info: ProductInfo) -> bool:
+        """Validate product information"""
+        if info.current_price <= 0:
+            self.logger.warning(f"Invalid price for {info.name}: {info.current_price}")
+            return False
+        return True
+    
+    def _create_scrapy_item(self, info: ProductInfo) -> Dict[str, Any]:
+        """Convert ProductInfo to scrapy item format"""
+        return {
+            'product_name': info.name,
+            'current_price': info.current_price,
+            'original_price': info.original_price,
+            'url': info.url,
+            'site': info.site,
+            'currency': info.currency,
+            'timestamp': info.timestamp,
+        }
+
+class PriceProcessor:
+    """Process and clean price data"""
+    
+    def __init__(self, *args, **kwargs):
+        self._processors = []
+        
+        if args and isinstance(args[0], str):
+            self._setup_from_string(args[0])
+        elif kwargs.get('config_file'):
+            self._setup_from_file(kwargs['config_file'])
+        elif kwargs.get('config_dict'):
+            self._setup_from_dict(kwargs['config_dict'])
+    
+    def process_price(self, price_text: str, **kwargs) -> Optional[float]:
+        """Process price text with multiple strategies"""
+        processors = [
+            self._extract_with_regex,
+            self._extract_with_split,
+            self._extract_with_findall,
+        ]
+        
+        for processor in processors:
+            result = processor(price_text, **kwargs)
+            if result is not None:
+                return result
+        return None
+    
+    def _extract_with_regex(self, text: str, pattern: str = r'[\d,.]+') -> Optional[float]:
+        """Extract price using regex"""
+        match = re.search(pattern, text)
+        if match:
+            return self._clean_number(match.group())
+        return None
+    
+    def _extract_with_split(self, text: str, separator: str = ' ') -> Optional[float]:
+        """Extract price by splitting text"""
+        for part in text.split(separator):
+            try:
+                return float(self._clean_number(part))
+            except (ValueError, TypeError):
+                continue
+        return None
+    
+    def _extract_with_findall(self, text: str) -> Optional[float]:
+        """Extract price using findall"""
+        numbers = re.findall(r'[\d,.]+', text)
+        if numbers:
+            return self._clean_number(numbers[0])
+        return None
+    
+    def _clean_number(self, text: str) -> float:
+        """Clean and convert number string to float"""
+        cleaned = text.replace(',', '.').replace(' ', '')
+        parts = cleaned.split('.')
+        if len(parts) > 2:
+            cleaned = parts[0] + '.' + ''.join(parts[1:])
+        return float(cleaned)
+    
+    def _setup_from_string(self, config_str: str):
+        pass
+    
+    def _setup_from_file(self, filepath: str):
+        pass
+    
+    def _setup_from_dict(self, config_dict: Dict[str, Any]):
+        pass
+
+class AdvancedPriceProcessor(PriceProcessor):
+    """Extended price processor with currency handling"""
+    
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.currency_symbols = {'₺', 'TL', 'USD', '€', '£', '$'}
+    
+    def process_price(self, price_text: str, remove_symbols: bool = True, **kwargs) -> Optional[float]:
+        """Process price with currency symbol removal"""
+        if remove_symbols:
+            for symbol in self.currency_symbols:
+                price_text = price_text.replace(symbol, '')
+        
+        price = super().process_price(price_text, **kwargs)
+        
+        if price and 'discount' in kwargs:
+            discount = kwargs['discount']
+            price = price * (1 - discount / 100)
+        
+        return price
+
+class PriceValidatorImpl:
+    """Implementation of price validator"""
+    
+    def __init__(self, min_price: float = 0.01, max_price: float = 1000000):
+        self.min_price = min_price
+        self.max_price = max_price
+    
+    def validate_price(self, price_info: ProductInfo) -> bool:
+        """Validate price information"""
+        if not price_info.name or not price_info.name.strip():
+            return False
+        
+        if price_info.current_price < self.min_price:
+            return False
+        
+        if price_info.current_price > self.max_price:
+            return False
+        
+        if price_info.original_price and price_info.original_price < price_info.current_price:
+            return False
+        
+        return True
+    
+    def normalize_price(self, price_text: str) -> Optional[float]:
+        """Normalize price text to float"""
+        if not price_text:
+            return None
+        
+        patterns_to_remove = ['TL', 'USD', 'EUR', 'GBP', '₺', '$', '€', '£', ' ', '\n', '\t']
+        cleaned = price_text.strip()
+        
+        for pattern in patterns_to_remove:
+            cleaned = cleaned.replace(pattern, '')
+        
+        numbers = re.findall(r'[\d,.]+', cleaned)
+        if not numbers:
+            return None
+        
+        try:
+            number_str = numbers[0].replace(',', '.')
+            if number_str.count('.') > 1 and ',' in number_str:
+                number_str = number_str.replace('.', '').replace(',', '.')
+            elif ',' in number_str and number_str.count(',') == 1:
+                if '.' in number_str and number_str.index('.') < number_str.index(','):
+                    number_str = number_str.replace('.', '').replace(',', '.')
+                else:
+                    number_str = number_str.replace(',', '.')
+            
+            return float(number_str)
+        except (ValueError, AttributeError):
+            return None
 
 # ============================================
-# SITE-SPECIFIC SPIDERS
+# SITE-SPECIFIC IMPLEMENTATIONS
 # ============================================
 
 class KitapyurduSpider(BasePriceSpider):
     """Spider for KitapYurdu.com"""
     
     name = "kitapyurdu"
+    allowed_domains = ["kitapyurdu.com"]
+    
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.price_processor = AdvancedPriceProcessor()
+        self.validator = PriceValidatorImpl(max_price=5000)
     
     def get_default_urls(self) -> List[str]:
         return [
@@ -157,338 +340,282 @@ class KitapyurduSpider(BasePriceSpider):
             "https://www.kitapyurdu.com/kitap/beyaz-zambaklar-ulkesinde/528653.html"
         ]
     
-    def parse(self, response):
-        loader = ItemLoader(item=PriceItem(), response=response)
+    def parse_product_page(self, response: scrapy.http.Response) -> ProductInfo:
+        """Parse KitapYurdu product page"""
+        name_selectors = [
+            'h1[itemprop="name"]::text',
+            '.product-heading h1::text',
+            '#product-name::text'
+        ]
         
-        # Product ID from URL
-        product_id = response.url.split('/')[-1].replace('.html', '')
-        loader.add_value('product_id', product_id)
+        product_name = self._extract_text(response, name_selectors, "Unknown Product")
         
-        # Product name
-        loader.add_css('product_name', 'h1[itemprop="name"]::text')
-        
-        # Price extraction
         price_selectors = [
             'div.price__item::text',
-            'div.price__value::text',
             '.price.price--now::text',
-            '.price__current::text',
-            '[itemprop="price"]::text',
-            '.price .price__value::text'
+            '[itemprop="price"]::attr(content)'
         ]
         
-        price_text = self.extract_with_selectors(response, price_selectors)
-        loader.add_value('current_price', price_text)
+        price_text = self._extract_text(response, price_selectors)
+        current_price = self.price_processor.process_price(price_text) if price_text else 0.0
         
-        # Original price (if on sale)
         original_price_selectors = [
             '.price.price--old::text',
-            '.price__old::text',
-            '.price del::text'
+            '.price__old::text'
         ]
-        original_price = self.extract_with_selectors(response, original_price_selectors)
-        loader.add_value('original_price', original_price)
         
-        # Additional info
-        loader.add_value('url', response.url)
-        loader.add_value('site', 'kitapyurdu')
-        loader.add_value('currency', 'TRY')
-        loader.add_value('timestamp', datetime.now().isoformat())
+        original_price_text = self._extract_text(response, original_price_selectors)
+        original_price = self.price_processor.process_price(original_price_text) if original_price_text else None
         
-        # Stock status
+        return ProductInfo(
+            name=product_name,
+            current_price=current_price,
+            original_price=original_price,
+            url=response.url,
+            site=self.name,
+            currency="TRY",
+            stock_status=self._extract_stock_status(response),
+            product_id=self._extract_product_id(response.url),
+            timestamp=datetime.now()
+        )
+    
+    def _extract_text(self, response: scrapy.http.Response, selectors: List[str], default: str = "") -> str:
+        for selector in selectors:
+            text = response.css(selector).get()
+            if text and text.strip():
+                return text.strip()
+        return default
+    
+    def _extract_stock_status(self, response: scrapy.http.Response) -> str:
         stock_selectors = [
             '.stock-status.in-stock::text',
-            '.stock-status::text',
-            '[itemprop="availability"]::attr(content)',
-            '.stock-info::text'
+            '[itemprop="availability"]::attr(content)'
         ]
-        stock_status = self.extract_with_selectors(response, stock_selectors, 'Unknown')
-        loader.add_value('stock_status', stock_status)
-        
-        # Image URL
-        loader.add_css('image_url', '[itemprop="image"]::attr(src)')
-        
-        # Category
-        loader.add_css('category', '.breadcrumb a::text')
-        
-        yield loader.load_item()
+        stock_text = self._extract_text(response, stock_selectors, "Unknown")
+        return "In Stock" if "stok" in stock_text.lower() else stock_text
+    
+    def _extract_product_id(self, url: str) -> Optional[str]:
+        match = re.search(r'/(\d+)\.html$', url)
+        return match.group(1) if match else None
 
 class HepsiburadaSpider(BasePriceSpider):
     """Spider for Hepsiburada.com"""
     
     name = "hepsiburada"
+    allowed_domains = ["hepsiburada.com"]
     
     def get_default_urls(self) -> List[str]:
         return [
             "https://www.hepsiburada.com/apple-iphone-15-128-gb-pm-HBC00004E3WIR",
-            "https://www.hepsiburada.com/samsung-galaxy-s24-256-gb-pm-HBC00004F1WP4",
-            "https://www.hepsiburada.com/xiaomi-redmi-note-13-pro-512-gb-pm-HBC00004ON6HZ"
+            "https://www.hepsiburada.com/samsung-galaxy-s24-256-gb-pm-HBC00004F1WP4"
         ]
     
-    def parse(self, response):
-        loader = ItemLoader(item=PriceItem(), response=response)
+    def parse_product_page(self, response: scrapy.http.Response) -> ProductInfo:
+        """Parse Hepsiburada product page"""
+        name = response.css('h1[data-test-id="product-name"]::text').get() or "Unknown Product"
         
-        # Product name
-        name_selectors = [
-            'h1[data-test-id="product-name"]::text',
-            'h1.product-name::text',
-            '#product-name::text',
-            '.product-name::text'
-        ]
-        product_name = self.extract_with_selectors(response, name_selectors)
-        loader.add_value('product_name', product_name)
+        price_text = response.css('[data-test-id="price-current-price"]::text').get()
+        processor = PriceProcessor()
+        current_price = processor.process_price(price_text) if price_text else 0.0
         
-        # Current price
-        price_selectors = [
-            '[data-test-id="price-current-price"]::text',
-            '.price::text',
-            '.product-price::text',
-            '.originalPrice::text'
-        ]
-        price_text = self.extract_with_selectors(response, price_selectors)
-        loader.add_value('current_price', price_text)
-        
-        # Original price
-        original_price_selectors = [
-            '[data-test-id="price-original-price"]::text',
-            '.originalPrice::text',
-            '.price.old::text'
-        ]
-        original_price = self.extract_with_selectors(response, original_price_selectors)
-        loader.add_value('original_price', original_price)
-        
-        # Product ID from URL
-        product_id = response.url.split('-')[-1]
-        loader.add_value('product_id', product_id)
-        
-        # Additional info
-        loader.add_value('url', response.url)
-        loader.add_value('site', 'hepsiburada')
-        loader.add_value('currency', 'TRY')
-        loader.add_value('timestamp', datetime.now().isoformat())
-        
-        # Stock status
-        stock_selectors = [
-            '[data-test-id="stock-info"]::text',
-            '.stockStatus::text',
-            '.stock-info::text'
-        ]
-        stock_status = self.extract_with_selectors(response, stock_selectors, 'In Stock')
-        loader.add_value('stock_status', stock_status)
-        
-        # Image URL
-        loader.add_css('image_url', '[data-test-id="product-image"] img::attr(src)')
-        
-        yield loader.load_item()
-
-class AmazonSpider(BasePriceSpider):
-    """Spider for Amazon.com.tr"""
-    
-    name = "amazon"
-    
-    def get_default_urls(self) -> List[str]:
-        return [
-            "https://www.amazon.com.tr/Apple-iPhone-15-128-GB/dp/B0CHX5PWMJ",
-            "https://www.amazon.com.tr/Samsung-Galaxy-S24-Android-Telefon/dp/B0CRP8JYB2",
-            "https://www.amazon.com.tr/Xiaomi-Redmi-Note-Pro/dp/B0CKVDT7Q4"
-        ]
-    
-    def parse(self, response):
-        loader = ItemLoader(item=PriceItem(), response=response)
-        
-        # Product name
-        name_selectors = [
-            '#productTitle::text',
-            'h1#title::text',
-            '.product-title-word-break::text'
-        ]
-        product_name = self.extract_with_selectors(response, name_selectors)
-        loader.add_value('product_name', product_name)
-        
-        # Price extraction - Amazon has complex price structure
-        # Try multiple strategies
-        
-        # Strategy 1: Get whole and fraction parts
-        whole_price = response.css('.a-price-whole::text').get()
-        fraction_price = response.css('.a-price-fraction::text').get()
-        
-        if whole_price:
-            # Clean whole price (remove thousands separator)
-            whole_clean = whole_price.strip().replace('.', '').replace(',', '')
-            fraction_clean = fraction_price.strip() if fraction_price else '00'
-            price_text = f"{whole_clean}.{fraction_clean}"
-        else:
-            # Strategy 2: Try other selectors
-            price_selectors = [
-                '.a-price .a-offscreen::text',
-                '#price_inside_buybox::text',
-                '#priceblock_ourprice::text',
-                '.a-price::text'
-            ]
-            price_text = self.extract_with_selectors(response, price_selectors)
-        
-        loader.add_value('current_price', price_text)
-        
-        # Original price (if on sale)
-        original_price_selectors = [
-            '.a-price.a-text-price .a-offscreen::text',
-            '.basisPrice .a-offscreen::text',
-            '.priceBlockStrikePriceString::text'
-        ]
-        original_price = self.extract_with_selectors(response, original_price_selectors)
-        loader.add_value('original_price', original_price)
-        
-        # Product ID (ASIN)
-        asin = None
-        if '/dp/' in response.url:
-            asin = response.url.split('/dp/')[-1].split('/')[0]
-        elif '/product/' in response.url:
-            asin = response.url.split('/product/')[-1].split('/')[0]
-        
-        if asin and len(asin) == 10:  # Amazon ASINs are 10 chars
-            loader.add_value('product_id', asin)
-        
-        # Additional info
-        loader.add_value('url', response.url)
-        loader.add_value('site', 'amazon')
-        loader.add_value('currency', 'TRY')
-        loader.add_value('timestamp', datetime.now().isoformat())
-        
-        # Stock status
-        stock_selectors = [
-            '#availability span::text',
-            '.a-color-success::text',
-            '#availability::text'
-        ]
-        stock_status = self.extract_with_selectors(response, stock_selectors, 'Available')
-        loader.add_value('stock_status', stock_status)
-        
-        # Image URL
-        image_selectors = [
-            '#landingImage::attr(src)',
-            '#imgBlkFront::attr(src)',
-            '.a-dynamic-image::attr(src)'
-        ]
-        image_url = self.extract_with_selectors(response, image_selectors)
-        loader.add_value('image_url', image_url)
-        
-        yield loader.load_item()
+        return ProductInfo(
+            name=name.strip(),
+            current_price=current_price,
+            url=response.url,
+            site=self.name,
+            currency="TRY",
+            stock_status="In Stock",
+            timestamp=datetime.now()
+        )
 
 # ============================================
-# MULTI-SITE MASTER SPIDER
+# DATABASE MODELS (For Person 2 Integration)
 # ============================================
 
-class MultiSiteSpider(scrapy.Spider):
-    """
-    Master spider that automatically detects site and uses appropriate spider
-    This demonstrates inheritance and routing logic
-    """
+Base = declarative_base()
+
+class ProductORM(Base):
+    """Database model for products"""
+    __tablename__ = 'products'
     
-    name = "multi_site"
+    id = sa.Column(sa.Integer, primary_key=True)
+    name = sa.Column(sa.String(500), nullable=False)
+    current_price = sa.Column(sa.Float, nullable=False)
+    original_price = sa.Column(sa.Float)
+    url = sa.Column(sa.String(1000), unique=True, nullable=False)
+    site = sa.Column(sa.String(100), nullable=False)
+    currency = sa.Column(sa.String(10), default="TRY")
+    stock_status = sa.Column(sa.String(50))
+    product_id = sa.Column(sa.String(100))
+    timestamp = sa.Column(sa.DateTime, default=datetime.now)
+    image_url = sa.Column(sa.String(1000))
+    category = sa.Column(sa.String(200))
     
-    def __init__(self, urls: Optional[List[str]] = None, *args, **kwargs):
-        super().__init__(*args, **kwargs)
-        self.start_urls = urls or []
-        
-        # Initialize site-specific spiders
-        self.spiders = {
-            'kitapyurdu': KitapyurduSpider(),
-            'hepsiburada': HepsiburadaSpider(),
-            'amazon': AmazonSpider()
+    def to_product_info(self) -> ProductInfo:
+        """Convert ORM object to ProductInfo"""
+        return ProductInfo(
+            name=self.name,
+            current_price=self.current_price,
+            original_price=self.original_price,
+            url=self.url,
+            site=self.site,
+            currency=self.currency,
+            stock_status=self.stock_status,
+            product_id=self.product_id,
+            timestamp=self.timestamp,
+            image_url=self.image_url,
+            category=self.category
+        )
+    
+    @classmethod
+    def from_product_info(cls, info: ProductInfo) -> 'ProductORM':
+        """Create ORM object from ProductInfo"""
+        return cls(
+            name=info.name,
+            current_price=info.current_price,
+            original_price=info.original_price,
+            url=info.url,
+            site=info.site,
+            currency=info.currency,
+            stock_status=info.stock_status,
+            product_id=info.product_id,
+            timestamp=info.timestamp,
+            image_url=info.image_url,
+            category=info.category
+        )
+
+class DatabaseManager:
+    """Database operations manager"""
+    
+    def __init__(self, connection_string: str):
+        self.engine = sa.create_engine(connection_string)
+        self.Session = sessionmaker(bind=self.engine)
+        Base.metadata.create_all(self.engine)
+    
+    def save_product(self, product_info: ProductInfo) -> bool:
+        """Save product to database"""
+        try:
+            session = self.Session()
+            product_orm = ProductORM.from_product_info(product_info)
+            session.add(product_orm)
+            session.commit()
+            session.close()
+            return True
+        except Exception as e:
+            print(f"Error saving product: {e}")
+            return False
+    
+    def get_products_by_site(self, site: str) -> List[ProductInfo]:
+        """Get products by site"""
+        try:
+            session = self.Session()
+            products = session.query(ProductORM).filter_by(site=site).all()
+            session.close()
+            return [p.to_product_info() for p in products]
+        except Exception as e:
+            print(f"Error getting products: {e}")
+            return []
+
+# ============================================
+# FACTORY PATTERN
+# ============================================
+
+class SpiderFactory:
+    """Factory for creating spider instances"""
+    
+    _spiders = {
+        'kitapyurdu': KitapyurduSpider,
+        'hepsiburada': HepsiburadaSpider,
+    }
+    
+    @classmethod
+    def create_spider(cls, site_name: str, urls: Optional[List[str]] = None) -> Optional[BasePriceSpider]:
+        """Create spider instance by site name"""
+        spider_class = cls._spiders.get(site_name.lower())
+        if spider_class:
+            return spider_class(urls=urls)
+        return None
+    
+    @classmethod
+    def create_spider_by_url(cls, url: str) -> Optional[BasePriceSpider]:
+        """Create spider based on URL"""
+        site = _detect_site_from_url(url)
+        return cls.create_spider(site, [url])
+
+# ============================================
+# UTILITY FUNCTIONS
+# ============================================
+
+def _detect_site_from_url(url: str) -> str:
+    """Detect site from URL"""
+    domain = urlparse(url).netloc.lower()
+    
+    if 'kitapyurdu' in domain:
+        return 'kitapyurdu'
+    elif 'hepsiburada' in domain:
+        return 'hepsiburada'
+    elif 'amazon' in domain:
+        return 'amazon'
+    else:
+        return 'unknown'
+
+def _run_spider(spider_class, urls: Optional[List[str]] = None, output_file: str = "prices.json") -> List[ProductInfo]:
+    """Run a spider and collect results"""
+    
+    collected_items = []
+    
+    class ItemCollectorPipeline:
+        def process_item(self, item, spider):
+            info = ProductInfo(
+                name=item.get('product_name', ''),
+                current_price=item.get('current_price', 0),
+                original_price=item.get('original_price'),
+                url=item.get('url', ''),
+                site=item.get('site', ''),
+                currency=item.get('currency', 'TRY'),
+                timestamp=item.get('timestamp', datetime.now())
+            )
+            collected_items.append(info)
+            return item
+    
+    settings = {
+        'ROBOTSTXT_OBEY': True,
+        'DOWNLOAD_DELAY': 1.0,
+        'LOG_LEVEL': 'INFO',
+        'ITEM_PIPELINES': {
+            '__main__.ItemCollectorPipeline': 100,
+        },
+        'FEEDS': {
+            output_file: {
+                'format': 'json',
+                'encoding': 'utf8',
+                'indent': 2,
+                'overwrite': True
+            }
         }
+    }
     
-    def start_requests(self):
-        """Route each URL to appropriate spider"""
-        for url in self.start_urls:
-            site = detect_site_from_url(url)
-            
-            if site in self.spiders:
-                spider = self.spiders[site]
-                # Pass request to appropriate spider
-                yield scrapy.Request(
-                    url, 
-                    callback=self.route_to_spider,
-                    meta={'site': site, 'spider': spider}
-                )
-            else:
-                self.logger.warning(f"No spider found for URL: {url}")
+    process = CrawlerProcess(settings)
+    spider = spider_class(urls=urls)
+    process.crawl(spider)
+    process.start()
     
-    def route_to_spider(self, response):
-        """Route response to appropriate spider's parse method"""
-        site = response.meta['site']
-        spider = response.meta['spider']
-        
-        if site == 'kitapyurdu':
-            yield from KitapyurduSpider().parse(response)
-        elif site == 'hepsiburada':
-            yield from HepsiburadaSpider().parse(response)
-        elif site == 'amazon':
-            yield from AmazonSpider().parse(response)
+    return collected_items
 
 # ============================================
-# VALIDATION PIPELINE
-# ============================================
-
-class PriceValidationPipeline:
-    """
-    Pipeline to validate and clean scraped price data
-    Demonstrates Scrapy's pipeline system for +10 points
-    """
-    
-    def process_item(self, item, spider):
-        """Validate price data before passing to database"""
-        
-        # Check if current_price exists and is valid
-        current_price = item.get('current_price')
-        if current_price is None:
-            spider.logger.warning(f"No price found for: {item.get('product_name', 'Unknown')}")
-            return None
-        
-        # Validate price range (reasonable prices for Turkey)
-        if current_price <= 0:
-            spider.logger.error(f"Invalid price ({current_price}) for: {item.get('url')}")
-            return None
-        
-        if current_price > 1000000:  # 1 million TL max
-            spider.logger.warning(f"Suspiciously high price ({current_price}) for: {item.get('product_name')}")
-        
-        # Ensure required fields
-        if not item.get('product_name'):
-            item['product_name'] = f"Unknown Product from {item.get('site', 'Unknown Site')}"
-        
-        if not item.get('currency'):
-            item['currency'] = 'TRY'
-        
-        if not item.get('timestamp'):
-            item['timestamp'] = datetime.now().isoformat()
-        
-        # Add metadata
-        item['scraped_by'] = 'AdvancedPriceCollector_v1.0'
-        item['data_quality'] = 'validated'
-        
-        spider.logger.info(f"Successfully scraped: {item['product_name']} - {current_price} {item['currency']}")
-        
-        return item
-
-# ============================================
-# ORIGINAL FUNCTIONS (for backward compatibility)
+# ORIGINAL COMPATIBILITY FUNCTIONS
 # ============================================
 
 def get_price_kitapyurdu(url: str) -> Optional[float]:
-    """
-    Original function for KitapYurdu price extraction
-    Maintained for backward compatibility
-    """
+    """Original function for backward compatibility"""
     try:
         headers = {
             "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
         }
         
-        print(f"Downloading page: {url}")
         response = requests.get(url, headers=headers, timeout=10)
         response.raise_for_status()
         
-        # Use regex to find price
         price_patterns = [
             r'"price":\s*"([\d,\.]+)"',
             r'class="price__item[^>]*>([^<]+)',
@@ -499,12 +626,11 @@ def get_price_kitapyurdu(url: str) -> Optional[float]:
             match = re.search(pattern, response.text)
             if match:
                 price_text = match.group(1)
-                price_number = clean_price(price_text)
-                if price_number:
-                    print(f"Found price: {price_number} TL")
-                    return price_number
+                processor = PriceProcessor()
+                price = processor.process_price(price_text)
+                if price:
+                    return price
         
-        print("Price not found!")
         return None
         
     except Exception as e:
@@ -512,211 +638,53 @@ def get_price_kitapyurdu(url: str) -> Optional[float]:
         return None
 
 # ============================================
-# MAIN EXECUTION & COMMAND LINE INTERFACE
+# MAIN EXECUTION
 # ============================================
 
-def run_scrapy_spider(spider_class, urls=None, output_file="prices.json"):
-    """Run a Scrapy spider and save results to JSON"""
-    
-    settings = {
-        'ROBOTSTXT_OBEY': True,
-        'DOWNLOAD_DELAY': 1,
-        'CONCURRENT_REQUESTS': 2,
-        'AUTOTHROTTLE_ENABLED': True,
-        'AUTOTHROTTLE_START_DELAY': 1,
-        'LOG_LEVEL': 'INFO',
-        'FEEDS': {
-            output_file: {
-                'format': 'json',
-                'encoding': 'utf8',
-                'indent': 2,
-                'overwrite': True
-            }
-        },
-        'ITEM_PIPELINES': {
-            '__main__.PriceValidationPipeline': 100,
-        }
-    }
-    
-    process = CrawlerProcess(settings)
-    
-    if urls:
-        process.crawl(spider_class, urls=urls)
-    else:
-        process.crawl(spider_class)
-    
-    print(f"Starting {spider_class.name} spider...")
-    process.start()
-    print(f"Spider completed! Results saved to {output_file}")
-
 def main():
-    """Command line interface for the price collector"""
-    
-    parser = argparse.ArgumentParser(
-        description='Price Collector - Multi-site Web Scraper (+10 Bonus Points)',
-        formatter_class=argparse.RawDescriptionHelpFormatter,
-        epilog="""
-Examples:
-  python price_collector.py --site all
-  python price_collector.py --site kitapyurdu --urls "https://www.kitapyurdu.com/kitap/example/123.html"
-  python price_collector.py --site multi --urls "url1,url2,url3" --output "my_prices.json"
-        """
-    )
-    
-    parser.add_argument('--site', 
-                       choices=['kitapyurdu', 'hepsiburada', 'amazon', 'multi', 'all'],
-                       default='all',
-                       help='Site to scrape (default: all)')
-    
-    parser.add_argument('--urls', 
-                       help='Comma-separated list of URLs to scrape')
-    
-    parser.add_argument('--output', '-o', 
-                       default='prices.json',
-                       help='Output JSON file (default: prices.json)')
-    
-    parser.add_argument('--simple', 
-                       action='store_true',
-                       help='Use simple requests method instead of Scrapy')
+    """Main entry point"""
+    parser = argparse.ArgumentParser(description='Professional Price Collector')
+    parser.add_argument('--site', choices=['kitapyurdu', 'hepsiburada', 'multi'], default='kitapyurdu')
+    parser.add_argument('--urls', help='Comma-separated URLs to scrape')
+    parser.add_argument('--output', default='prices.json', help='Output JSON file')
+    parser.add_argument('--db', help='Database connection string')
     
     args = parser.parse_args()
     
     print("=" * 60)
-    print("PRICE COLLECTOR - Person 1")
-    print("Scrapy Implementation for +10 Bonus Points")
+    print("PROFESSIONAL PRICE COLLECTOR")
+    print("Multi-site Web Scraping System")
     print("=" * 60)
     
-    # Prepare URLs if provided
     urls = None
     if args.urls:
-        urls = [url.strip() for url in args.urls.split(',')]
-        print(f"Will scrape {len(urls)} custom URL(s)")
+        urls = [u.strip() for u in args.urls.split(',')]
     
-    # Run appropriate spider
-    if args.simple and args.site == 'kitapyurdu':
-        print("Using simple requests method (backward compatibility)")
-        if urls:
-            for url in urls:
-                price = get_price_kitapyurdu(url)
-                if price:
-                    print(f"Price: {price} TL")
-        else:
-            test_url = "https://www.kitapyurdu.com/kitap/harry-potter-ve-felsefe-tasi/32780.html"
-            price = get_price_kitapyurdu(test_url)
-            if price:
-                print(f"Price: {price} TL")
-    
+    if args.site == 'multi' and urls:
+        all_results = []
+        for url in urls:
+            site = _detect_site_from_url(url)
+            spider = SpiderFactory.create_spider(site, [url])
+            if spider:
+                print(f"Scraping {site}: {url}")
+                results = _run_spider(type(spider), [url], f"{site}_{args.output}")
+                all_results.extend(results)
     else:
-        print("Using Scrapy (modern library for +10 points)")
-        
-        if args.site == 'kitapyurdu':
-            run_scrapy_spider(KitapyurduSpider, urls, args.output)
-        
-        elif args.site == 'hepsiburada':
-            run_scrapy_spider(HepsiburadaSpider, urls, args.output)
-        
-        elif args.site == 'amazon':
-            run_scrapy_spider(AmazonSpider, urls, args.output)
-        
-        elif args.site == 'multi' and urls:
-            run_scrapy_spider(MultiSiteSpider, urls, args.output)
-        
-        elif args.site == 'all':
-            # Run all spiders sequentially
-            spiders = [KitapyurduSpider, HepsiburadaSpider, AmazonSpider]
-            for i, spider_class in enumerate(spiders):
-                output_file = args.output.replace('.json', f'_{spider_class.name}.json')
-                run_scrapy_spider(spider_class, urls, output_file)
-                if i < len(spiders) - 1:
-                    print("\n" + "=" * 60 + "\n")
+        spider_class = SpiderFactory._spiders.get(args.site)
+        if spider_class:
+            print(f"Running {args.site} spider...")
+            results = _run_spider(spider_class, urls, args.output)
+            
+            if args.db and results:
+                print("Saving to database...")
+                db_manager = DatabaseManager(args.db)
+                for product in results:
+                    db_manager.save_product(product)
+                print(f"Saved {len(results)} products to database")
     
     print("\n" + "=" * 60)
-    print("Price collection completed!")
-    print(f"Data saved to: {args.output}")
-    print("Bonus points achieved: +10 (Scrapy modern library)")
+    print("Price collection completed successfully!")
     print("=" * 60)
 
-# ============================================
-# TEST FUNCTION
-# ============================================
-
-def test_all_spiders():
-    """Test function to verify all spiders are working"""
-    
-    test_cases = [
-        ("kitapyurdu", [
-            "https://www.kitapyurdu.com/kitap/harry-potter-ve-felsefe-tasi/32780.html"
-        ]),
-        ("hepsiburada", [
-            "https://www.hepsiburada.com/apple-iphone-15-128-gb-pm-HBC00004E3WIR"
-        ]),
-        ("amazon", [
-            "https://www.amazon.com.tr/Apple-iPhone-15-128-GB/dp/B0CHX5PWMJ"
-        ])
-    ]
-    
-    print("Testing all spiders...")
-    
-    for site_name, test_urls in test_cases:
-        print(f"\nTesting {site_name}...")
-        
-        if site_name == 'kitapyurdu':
-            # Test original function
-            for url in test_urls:
-                price = get_price_kitapyurdu(url)
-                if price:
-                    print(f"{site_name}: {price} TL")
-                else:
-                    print(f"{site_name}: Failed")
-        
-        # Test Scrapy spider
-        try:
-            settings = {
-                'LOG_LEVEL': 'ERROR',
-                'ROBOTSTXT_OBEY': False
-            }
-            
-            process = CrawlerProcess(settings)
-            
-            if site_name == 'kitapyurdu':
-                process.crawl(KitapyurduSpider, urls=test_urls)
-            elif site_name == 'hepsiburada':
-                process.crawl(HepsiburadaSpider, urls=test_urls)
-            elif site_name == 'amazon':
-                process.crawl(AmazonSpider, urls=test_urls)
-            
-            print(f"{site_name} Scrapy spider: Ready")
-            
-        except Exception as e:
-            print(f"{site_name} Scrapy spider: {e}")
-    
-    print("\nAll tests completed!")
-
-# ============================================
-# ENTRY POINT
-# ============================================
-
 if __name__ == "__main__":
-    import sys
-    
-    if len(sys.argv) > 1:
-        main()
-    else:
-        # Default behavior: run multi-site spider with example URLs
-        print("No arguments provided. Running demo mode...")
-        
-        example_urls = [
-            "https://www.kitapyurdu.com/kitap/harry-potter-ve-felsefe-tasi/32780.html",
-            "https://www.hepsiburada.com/apple-iphone-15-128-gb-pm-HBC00004E3WIR",
-            "https://www.amazon.com.tr/Apple-iPhone-15-128-GB/dp/B0CHX5PWMJ"
-        ]
-        
-        run_scrapy_spider(MultiSiteSpider, example_urls, "demo_prices.json")
-        
-        # Also test original function
-        print("\nTesting original function for backward compatibility...")
-        price = get_price_kitapyurdu(example_urls[0])
-        if price:
-            print(f"Original function works: {price} TL")
-
-"""
+    main()
