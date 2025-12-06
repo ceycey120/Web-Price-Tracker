@@ -27,7 +27,7 @@ class ChartConfig:
     theme: str = "plotly_white"
     colors: List[str] = None
     
-    def _post_init_(self):
+    def _post__init__(self):
         if self.colors is None:
             self.colors = ["#1f77b4", "#ff7f0e", "#2ca02c", "#d62728", "#9467bd"]
 
@@ -95,7 +95,7 @@ class AnalysisDataLoader:
 class PriceChartVisualizer:
     """Creates various price charts using Plotly"""
     
-    def _init_(self):
+    def __init__(self):
         plt.style.use('seaborn-v0_8-darkgrid')
         self.colors = px.colors.qualitative.Set3
     
@@ -354,7 +354,7 @@ class PriceVisualizer:
     Combines charts and tables for comprehensive visualization
     """
     
-    def _init_(self):
+    def __init__(self):
         self.data_loader = AnalysisDataLoader()
         self.chart_viz = PriceChartVisualizer()
         self.table_viz = PriceTableVisualizer()
