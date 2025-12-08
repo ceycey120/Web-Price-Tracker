@@ -274,6 +274,8 @@ class PriceChartVisualizer:
         
         return fig
 
+
+
 # ==================== TABLE VISUALIZER ====================
 
 class PriceTableVisualizer:
