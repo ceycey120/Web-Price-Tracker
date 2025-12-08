@@ -5,31 +5,43 @@ from typing import Dict, Any, List
 from contextlib import contextmanager
 
 # Database ORM for bonus points
-from sqlalchemy import create_engine, Column, Integer, String, Float, DateTime, Text
+from sqlalchemy import create_engine, Column, Integer, String, Float, DateTime, Text, ForeignKey
 from sqlalchemy.ext.declarative import declarative_base
-from sqlalchemy.orm import sessionmaker
-import pymongo
+from sqlalchemy.orm import sessionmaker, relationship 
+import pymongo # MongoDB desteği için tutulmalı
 
 Base = declarative_base()
 
 # Database Models
 class Product(Base):
+    """Represents each unique product in the database."""
     __tablename__ = 'products'
     
-    id = Column(Integer, primary_key=True, autoincrement=True)
-    product_id = Column(String(100), unique=True)
-    name = Column(String(255), nullable=False)
-    url = Column(Text, nullable=False)
-    site = Column(String(50))
+    id = Column(Integer, primary_key=True) # Primary Key
+    
+    # We keep the product_id as an external ID (as in KitapYurdu), but we don't enforce uniqueness.
+    # The URL will make the product unique anyway.
+    product_id = Column(String(100), unique=False, nullable=True) 
+    
+    name = Column(String(500), nullable=False) # Size increased to 500
+    url = Column(String(1000), unique=True, nullable=False) #URL must be unique
+    site = Column(String(100))
     category = Column(String(100))
-    image_url = Column(Text)
+    image_url = Column(String(1000))
     created_at = Column(DateTime, default=datetime.now)
 
+    # Relationship from Product to PriceHistory
+    price_history = relationship("PriceHistory", back_populates="product_info", cascade="all, delete-orphan")
+
+
 class PriceHistory(Base):
+    """Keeps price history of products."""
     __tablename__ = 'price_history'
     
-    id = Column(Integer, primary_key=True, autoincrement=True)
-    product_id = Column(String(100), nullable=False)
+    id = Column(Integer, primary_key=True)
+    
+    product_base_id = Column(Integer, ForeignKey('products.id'), nullable=False) 
+    
     current_price = Column(Float, nullable=False)
     original_price = Column(Float)
     currency = Column(String(10), default='TRY')
@@ -37,6 +49,9 @@ class PriceHistory(Base):
     timestamp = Column(DateTime, default=datetime.now)
     scraped_by = Column(String(50))
     data_source = Column(String(50))
+    
+    # PriceHistory'den Product'a ilişki (Eklendi)
+    product_info = relationship("Product", back_populates="price_history")
 
 class PriceDataManager:
     """
@@ -44,7 +59,7 @@ class PriceDataManager:
     Receives price data from Person 1 and stores in database
     """
     
-    def __init__(self, database_type="PostgreSQL", database_name="price_tracker"):
+    def __init__(self, database_type="SQLite", database_name="price_tracker"):
         self.database_type = database_type
         self.database_name = database_name
         
@@ -55,25 +70,30 @@ class PriceDataManager:
             self._create_tables()
     
     def _setup_database(self):
-        """Setup database connection"""
-        if self.database_type == "PostgreSQL":
-            connection_string = os.getenv(
-                "DATABASE_URL", 
-                "postgresql://user:password@localhost:5432/price_tracker"
-            )
-            self.engine = create_engine(connection_string)
-            self.SessionLocal = sessionmaker(bind=self.engine)
+            """Setup database connection (SQLite, PostgreSQL, or MongoDB)"""
             
-        elif self.database_type == "MongoDB":
-            self.mongo_client = pymongo.MongoClient(
-                os.getenv("MONGO_URI", "mongodb://localhost:27017/")
-            )
-            self.db = self.mongo_client[self.database_name]
-            return
-            
-        elif self.database_type == "SQLite":
-            self.engine = create_engine(f"sqlite:///{self.database_name}.db")
-            self.SessionLocal = sessionmaker(bind=self.engine)
+            if self.database_type == "PostgreSQL":
+                # PostgreSQL bağlantı dizesi (Şu an kullanılmıyor)
+                connection_string = os.getenv(
+                    "DATABASE_URL", 
+                    "postgresql://postgres:1234@localhost:5433/price_tracker"
+                )
+                self.engine = create_engine(connection_string)
+                self.SessionLocal = sessionmaker(bind=self.engine)
+                
+            elif self.database_type == "MongoDB":
+                # MongoDB bağlantı kodu (Şu an kullanılmıyor)
+                # self.client = pymongo.MongoClient(os.getenv("MONGO_URI", "mongodb://localhost:27017/"))
+                # self.db = self.client[self.database_name]
+                return
+                
+            elif self.database_type == "SQLite":
+                # A file named price_tracker.db is created
+                self.engine = create_engine(f"sqlite:///{self.database_name}.db")
+                self.SessionLocal = sessionmaker(bind=self.engine)
+                
+            else:
+                raise ValueError(f"Unknown database type: {self.database_type}")
     
     def _create_tables(self):
         """Create database tables for SQL databases"""
@@ -127,36 +147,43 @@ class PriceDataManager:
     
     def _save_to_sql(self, data: Dict[str, Any]) -> bool:
         """Save to SQL database using ORM"""
-        with self.get_db_session() as db:
-            # Check if product exists
-            product = db.query(Product).filter_by(url=data['url']).first()
-            
-            if not product:
-                product = Product(
-                    product_id=data.get('product_id'),
-                    name=data['product_name'],
-                    url=data['url'],
-                    site=data.get('site'),
-                    category=data.get('category'),
-                    image_url=data.get('image_url')
+        
+        try:
+            with self.get_db_session() as db:
+                # 1. Search for existing product by URL
+                product = db.query(Product).filter_by(url=data['url']).first()
+                
+                if not product:
+                    # If the product does not exist, create a new Product record
+                    product = Product(
+                        product_id=data.get('product_id'),
+                        name=data['product_name'],
+                        url=data['url'],
+                        site=data.get('site'),
+                        category=data.get('category'),
+                        image_url=data.get('image_url')
+                    )
+                    db.add(product)
+                    db.flush() #Flush is required to assign the ID
+                
+                # 2. Save price history record
+                price_record = PriceHistory(
+                    # FIX: Use of Foreign Key (product_base_id)
+                    product_base_id=product.id,  
+                    current_price=data['current_price'],
+                    original_price=data.get('original_price'),
+                    currency=data.get('currency', 'TRY'),
+                    stock_status=data.get('stock_status'),
+                    timestamp=datetime.fromisoformat(data['timestamp']), 
+                    scraped_by=data.get('scraped_by', 'PriceCollector'),
+                    data_source=data.get('data_source', 'scraper')
                 )
-                db.add(product)
-                db.flush()
-            
-            # Save price record
-            price_record = PriceHistory(
-                product_id=data.get('product_id') or str(product.id),
-                current_price=data['current_price'],
-                original_price=data.get('original_price'),
-                currency=data.get('currency', 'TRY'),
-                stock_status=data.get('stock_status'),
-                timestamp=datetime.fromisoformat(data['timestamp']),
-                scraped_by=data.get('scraped_by', 'PriceCollector'),
-                data_source=data.get('data_source', 'scraper')
-            )
-            db.add(price_record)
-            
-            return True
+                db.add(price_record)
+                
+                return True
+        except Exception as e:
+            print(f"SQL Save Error: {e}")
+            return False
     
     def _save_to_mongodb(self, data: Dict[str, Any]) -> bool:
         """Save to MongoDB"""
@@ -250,7 +277,7 @@ class PriceDataManager:
             Product.url
         ).join(
             PriceHistory,
-            PriceHistory.product_id == Product.product_id
+            PriceHistory.product_base_id == Product.id
         )
         
         if product_url:
@@ -322,8 +349,8 @@ class PriceDataManager:
 
 # Example usage
 if __name__ == "__main__":
-    # Use PostgreSQL for better performance
-    manager = PriceDataManager(database_type="PostgreSQL")
+    # Use SQLite for better performance
+    manager = PriceDataManager(database_type="SQLite")
     
     # Sample data from Person 1
     sample_data = {
