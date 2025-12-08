@@ -18,6 +18,9 @@ from enum import Enum
 from scrapy.crawler import CrawlerProcess
 from scrapy.loader import ItemLoader
 from scrapy.item import Item, Field
+from scrapy.signalmanager import SignalManager
+from scrapy import signals
+from twisted.internet import reactor, defer
 from itemloaders.processors import TakeFirst, MapCompose
 from urllib.parse import urlparse
 import sqlalchemy as sa
@@ -57,6 +60,18 @@ class ProductInfo:
             data['timestamp'] = datetime.fromisoformat(data['timestamp'])
         return cls(**{k: v for k, v in data.items() if k in cls.__annotations__})
 
+class PriceItem(Item):
+    """Scrapy Item definition matching ProductInfo structure"""
+    product_name = Field(output_processor=TakeFirst())
+    current_price = Field(output_processor=TakeFirst())
+    original_price = Field(output_processor=TakeFirst())
+    url = Field(output_processor=TakeFirst())
+    site = Field(output_processor=TakeFirst())
+    currency = Field(output_processor=TakeFirst())
+    stock_status = Field(output_processor=TakeFirst())
+    product_id = Field(output_processor=TakeFirst())
+    timestamp = Field(output_processor=TakeFirst())
+
 class Currency(Enum):
     """Supported currency types"""
     TRY = "TRY"
@@ -71,6 +86,33 @@ class StockStatus(Enum):
     PRE_ORDER = "Pre-Order"
     LIMITED = "Limited Stock"
 
+class CollectorPipeline:
+    """Collects scraped items directly into a list."""
+    
+    def __init__(self, collected_items: List[Dict[str, Any]]):
+        #self.collected_items now references the list in _run_spider directly.
+        self.collected_items = collected_items
+
+    @classmethod
+    def from_crawler(cls, crawler):
+        # This provides direct access to the list set in _run_spider.
+        collected_list = crawler.settings.get('COLLECTED_ITEMS_LIST', [])
+        return cls(collected_items=collected_list)
+
+    def process_item(self, item, spider):
+        #When Scrapy finds an item, it converts it into a dictionary
+        item_dict = dict(item)
+        
+        # Add the missing fields when converting to ProductInfo (especially timestamp)
+        if 'timestamp' not in item_dict:
+             item_dict['timestamp'] = datetime.now().isoformat()
+        if 'stock_status' not in item_dict:
+            pass
+
+        self.collected_items.append(item_dict) 
+        
+        return item
+    
 # ============================================
 # INTERFACES
 # ============================================
@@ -177,6 +219,32 @@ class BasePriceSpider(scrapy.Spider, ABC):
             'currency': info.currency,
             'timestamp': info.timestamp,
         }
+    def _create_scrapy_item(self, info: ProductInfo) -> PriceItem: # Dict yerine PriceItem kullan
+        """Convert ProductInfo to Scrapy Item object"""
+        item = PriceItem(
+            product_name=info.name,
+            current_price=info.current_price,
+            original_price=info.original_price,
+            url=info.url,
+            site=info.site,
+            currency=info.currency,
+            stock_status=info.stock_status,
+            product_id=info.product_id,
+            timestamp=info.timestamp.isoformat()
+        )
+        return item
+    
+    # parse metodu içinde yield dönüşü PriceItem olmalı
+    def parse(self, response: scrapy.http.Response):
+        """Main parsing method"""
+        try:
+            product_info = self.parse_product_page(response)
+            if self._validate_product_info(product_info):
+                # self._collected_items artık kullanılmıyor, Pipeline kullanacak
+                yield self._create_scrapy_item(product_info) 
+        except Exception as e:
+            self.logger.error(f"Error parsing {response.url}: {e}")
+
 
 class PriceProcessor:
     """Process and clean price data"""
@@ -560,47 +628,58 @@ def _detect_site_from_url(url: str) -> str:
         return 'unknown'
 
 def _run_spider(spider_class, urls: Optional[List[str]] = None, output_file: str = "prices.json") -> List[ProductInfo]:
-    """Run a spider and collect results"""
+    """Run a spider and collect results using Item Pipeline."""
     
-    collected_items = []
-    
-    class ItemCollectorPipeline:
-        def process_item(self, item, spider):
-            info = ProductInfo(
-                name=item.get('product_name', ''),
-                current_price=item.get('current_price', 0),
-                original_price=item.get('original_price'),
-                url=item.get('url', ''),
-                site=item.get('site', ''),
-                currency=item.get('currency', 'TRY'),
-                timestamp=item.get('timestamp', datetime.now())
-            )
-            collected_items.append(info)
-            return item
+    collected_items_raw = []
     
     settings = {
-        'ROBOTSTXT_OBEY': True,
-        'DOWNLOAD_DELAY': 1.0,
-        'LOG_LEVEL': 'INFO',
-        'ITEM_PIPELINES': {
-            '__main__.ItemCollectorPipeline': 100,
-        },
-        'FEEDS': {
-            output_file: {
-                'format': 'json',
-                'encoding': 'utf8',
-                'indent': 2,
-                'overwrite': True
-            }
+            'ROBOTSTXT_OBEY': True,
+            'DOWNLOAD_DELAY': 1.0,
+            'LOG_LEVEL': 'WARNING',
+            'TWISTED_REACTOR': 'twisted.internet.selectreactor.SelectReactor', 
+            'ITEM_PIPELINES': {
+                __name__ + '.CollectorPipeline': 300,
+            },
+            'COLLECTED_ITEMS_LIST': collected_items_raw,
         }
-    }
     
+   
     process = CrawlerProcess(settings)
-    spider = spider_class(urls=urls)
-    process.crawl(spider)
-    process.start()
+        
+    process.crawl(spider_class, urls=urls)
     
-    return collected_items
+    #Blocking call waits until Scrapy completes
+    try:
+        process.start()
+    except Exception as e:
+        print(f"Scrapy Process Error: {e}")
+        return []
+    
+    #Convert the collected raw dictionary list to ProductInfo list
+    collected_products: List[ProductInfo] = []
+    for item in collected_items_raw:
+        try:
+            #We convert the timestamp because it is stored as a string in ISO format.
+            item_data = item.copy()
+            item_data['timestamp'] = datetime.fromisoformat(item_data['timestamp'])
+            
+            info = ProductInfo(
+                name=item_data.get('product_name', ''),
+                current_price=item_data.get('current_price', 0.0),
+                original_price=item_data.get('original_price'),
+                url=item_data.get('url', ''),
+                site=item_data.get('site', ''),
+                currency=item_data.get('currency', 'TRY'),
+                stock_status=item_data.get('stock_status', 'Unknown'),
+                product_id=item_data.get('product_id'),
+                timestamp=item_data.get('timestamp', datetime.now())
+            )
+            collected_products.append(info)
+        except Exception as e:
+            print(f"Error converting item to ProductInfo: {e}")
+            continue
+
+    return collected_products
 
 # ============================================
 # ORIGINAL COMPATIBILITY FUNCTIONS
@@ -661,30 +740,49 @@ def main():
         urls = [u.strip() for u in args.urls.split(',')]
     
     if args.site == 'multi' and urls:
-        all_results = []
+        all_results: List[ProductInfo] = [] # Tip ekleme
         for url in urls:
             site = _detect_site_from_url(url)
             spider = SpiderFactory.create_spider(site, [url])
             if spider:
                 print(f"Scraping {site}: {url}")
+                #Incorrect file name: We must use different file names for each site.
+                # But now we are saving directly to the list, not to the file.
+                
+                # We just run the relevant Spider
                 results = _run_spider(type(spider), [url], f"{site}_{args.output}")
                 all_results.extend(results)
+        
+        #DB integration for Multi mode
+        if args.db and all_results:
+            print("Saving to database...")
+           # To make it compatible with Person 2's DatabaseManager
+            # we will update this part according to Person 2's ORM.
+            # The current DatabaseManager (in landscaper.py) is using ProductORM.
+            db_manager = DatabaseManager(args.db)
+            for product in all_results:
+                db_manager.save_product(product)
+            print(f"Saved {len(all_results)} products to database")
+            
     else:
         spider_class = SpiderFactory._spiders.get(args.site)
         if spider_class:
             print(f"Running {args.site} spider...")
-            results = _run_spider(spider_class, urls, args.output)
+            # Item Pipeline is used to save the JSON file output,
+            # but since we are saving directly to the list, output_file is unnecessary.
+            results = _run_spider(spider_class, urls, args.output) 
             
             if args.db and results:
                 print("Saving to database...")
                 db_manager = DatabaseManager(args.db)
                 for product in results:
-                    db_manager.save_product(product)
+                    # NOTE: DatabaseManager.save_product gets ProductInfo, this is correct.
+                    db_manager.save_product(product) 
                 print(f"Saved {len(results)} products to database")
     
-    print("\n" + "=" * 60)
-    print("Price collection completed successfully!")
-    print("=" * 60)
+print("\n" + "=" * 60)
+print("Price collection completed successfully!")
+print("=" * 60)
 
 if __name__ == "__main__":
     main()
