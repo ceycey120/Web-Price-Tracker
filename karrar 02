@@ -1,0 +1,285 @@
+import os
+import json
+import scrapy
+from datetime import datetime, timezone
+from typing import Dict, Any, List
+from contextlib import contextmanager
+
+# --- Database Dependencies ---
+from sqlalchemy import create_engine, Column, Integer, String, Float, DateTime, Text
+from sqlalchemy.ext.declarative import declarative_base
+from sqlalchemy.orm import sessionmaker
+import pymongo
+
+Base = declarative_base()
+
+# ======================
+# SQL Models
+# ======================
+class Product(Base):
+    __tablename__ = 'products'
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    product_id = Column(String(100), index=True)
+    name = Column(String(255), nullable=False)
+    url = Column(Text, nullable=False, unique=True, index=True)
+    site = Column(String(50))
+    category = Column(String(100))
+    image_url = Column(Text)
+    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
+
+class PriceHistory(Base):
+    __tablename__ = 'price_history'
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    product_url = Column(Text, nullable=False, index=True)
+    current_price = Column(Float, nullable=False)
+    original_price = Column(Float)
+    currency = Column(String(10), default='TRY')
+    stock_status = Column(String(50))
+    timestamp = Column(DateTime, default=lambda: datetime.now(timezone.utc))
+    scraped_by = Column(String(50))
+    data_source = Column(String(50))
+
+
+# ======================
+# Data Manager
+# ======================
+class PriceDataManager:
+    def __init__(self, database_type="SQLite", database_name="price_tracker"):
+        self.database_type = database_type
+        self.database_name = database_name
+        print(f"Setting up {database_type} database...")
+        self._setup_database()
+        if database_type != "MongoDB":
+            self._create_tables()
+
+    def _setup_database(self):
+        if self.database_type == "PostgreSQL":
+            connection_string = os.getenv(
+                "DATABASE_URL",
+                "postgresql://user:password@localhost:5432/price_tracker"
+            )
+            self.engine = create_engine(connection_string)
+            self.SessionLocal = sessionmaker(bind=self.engine)
+        elif self.database_type == "MongoDB":
+            self.mongo_client = pymongo.MongoClient(
+                os.getenv("MONGO_URI", "mongodb://localhost:27017/")
+            )
+            self.db = self.mongo_client[self.database_name]
+        elif self.database_type == "SQLite":
+            self.engine = create_engine(f"sqlite:///{self.database_name}.db")
+            self.SessionLocal = sessionmaker(bind=self.engine)
+
+    def _create_tables(self):
+        if hasattr(self, 'engine'):
+            Base.metadata.create_all(bind=self.engine)
+            print("Database tables created")
+
+    @contextmanager
+    def get_db_session(self):
+        if self.database_type == "MongoDB":
+            yield self.db
+        else:
+            db = self.SessionLocal()
+            try:
+                yield db
+                db.commit()
+            except Exception:
+                db.rollback()
+                raise
+            finally:
+                db.close()
+
+    def save_price_data(self, price_data: Dict[str, Any]) -> bool:
+        try:
+            if self.database_type == "MongoDB":
+                return self._save_to_mongodb(price_data)
+            else:
+                return self._save_to_sql(price_data)
+        except Exception as e:
+            print(f"Error saving data: {e}")
+            return False
+
+    def _save_to_sql(self, data: Dict[str, Any]) -> bool:
+        with self.get_db_session() as db:
+            clean_url = data['url'].strip()
+            product = db.query(Product).filter_by(url=clean_url).first()
+            if not product:
+                product = Product(
+                    product_id=data.get('product_id'),
+                    name=data['product_name'],
+                    url=clean_url,
+                    site=data.get('site'),
+                    category=data.get('category'),
+                    image_url=data.get('image_url')
+                )
+                db.add(product)
+                db.flush()
+
+            # Parse timestamp safely
+            ts_str = data['timestamp']
+            if isinstance(ts_str, str):
+                if ts_str.endswith('Z'):
+                    ts = datetime.fromisoformat(ts_str.replace('Z', '+00:00'))
+                else:
+                    ts = datetime.fromisoformat(ts_str)
+            else:
+                ts = ts_str
+
+            price_record = PriceHistory(
+                product_url=clean_url,
+                current_price=float(data['current_price']),
+                original_price=float(data['original_price']) if data.get('original_price') else None,
+                currency=data.get('currency', 'TRY'),
+                stock_status=data.get('stock_status'),
+                timestamp=ts,
+                scraped_by=data.get('scraped_by', 'PriceCollector'),
+                data_source=data.get('data_source', 'scraper')
+            )
+            db.add(price_record)
+            return True
+
+    def _save_to_mongodb(self, data: Dict[str, Any]) -> bool:
+        products_col = self.db['products']
+        prices_col = self.db['price_history']
+
+        clean_url = data['url'].strip()
+        product_doc = {
+            'product_id': data.get('product_id'),
+            'name': data['product_name'],
+            'url': clean_url,
+            'site': data.get('site'),
+            'category': data.get('category'),
+            'image_url': data.get('image_url'),
+            'created_at': datetime.now(timezone.utc)
+        }
+
+        ts_str = data['timestamp']
+        if isinstance(ts_str, str):
+            if ts_str.endswith('Z'):
+                ts = datetime.fromisoformat(ts_str.replace('Z', '+00:00'))
+            else:
+                ts = datetime.fromisoformat(ts_str)
+        else:
+            ts = ts_str
+
+        price_doc = {
+            'product_url': clean_url,
+            'current_price': float(data['current_price']),
+            'original_price': float(data['original_price']) if data.get('original_price') else None,
+            'currency': data.get('currency', 'TRY'),
+            'stock_status': data.get('stock_status'),
+            'timestamp': ts,
+            'scraped_by': data.get('scraped_by', 'PriceCollector'),
+            'data_source': data.get('data_source'),
+            'stored_at': datetime.now(timezone.utc)
+        }
+
+        products_col.update_one({'url': clean_url}, {'$set': product_doc}, upsert=True)
+        prices_col.insert_one(price_doc)
+        return True
+
+    def get_stats(self) -> Dict[str, Any]:
+        with self.get_db_session() as db:
+            if self.database_type == "MongoDB":
+                pc = self.db['products'].count_documents({})
+                pr = self.db['price_history'].count_documents({})
+            else:
+                pc = db.query(Product).count()
+                pr = db.query(PriceHistory).count()
+            return {'database_type': self.database_type, 'product_count': pc, 'price_records': pr}
+
+
+# ======================
+# Scrapy Spider (Embedded)
+# ======================
+class KitapyurduSpider(scrapy.Spider):
+    name = "kitapyurdu"
+    start_urls = [
+        "https://www.kitapyurdu.com/kitap/harry-potter-ve-felsefe-tasi/32780.html"
+    ]
+
+    custom_settings = {
+        'ROBOTSTXT_OBEY': False,
+        'USER_AGENT': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
+    }
+
+    def parse(self, response):
+        # Extract data using CSS selectors
+        title = response.css('h1.product-title::text').get(default='').strip()
+        current_price_text = response.css('span.price span::text').get(default='').replace('TL', '').replace(',', '.').strip()
+        original_price_text = response.css('del span::text').get(default='').replace('TL', '').replace(',', '.').strip()
+
+        current_price = float(current_price_text) if current_price_text else 0.0
+        original_price = float(original_price_text) if original_price_text else None
+
+        # Determine stock (simplified)
+        stock_status = "In Stock" if "sepete-ekle-button" in response.text else "Out of Stock"
+
+        scraped_data = {
+            "product_name": title,
+            "product_id": "32780",
+            "url": response.url,
+            "current_price": current_price,
+            "original_price": original_price,
+            "currency": "TRY",
+            "site": "kitapyurdu",
+            "stock_status": stock_status,
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "scraped_by": "Scrapy",
+            "data_source": "kitapyurdu"
+        }
+
+        # Save to database (choose one)
+        manager = PriceDataManager(database_type="SQLite")  # or "PostgreSQL" / "MongoDB"
+        success = manager.save_price_data(scraped_data)
+        self.logger.info(f"Saved: {title} → {'Success' if success else 'Failed'}")
+
+
+# ======================
+# Standalone Import Function (for JSON files)
+# ======================
+def import_from_scraper(json_file: str = "prices.json", db_type="SQLite") -> int:
+    manager = PriceDataManager(database_type=db_type)
+    try:
+        with open(json_file, 'r', encoding='utf-8') as f:
+            data = json.load(f)
+        count = 0
+        for item in data:
+            if manager.save_price_data(item):
+                count += 1
+        print(f"Imported {count}/{len(data)} records into {db_type}")
+        return count
+    except Exception as e:
+        print(f"Import error: {e}")
+        return 0
+
+
+# ======================
+# Main Execution
+# ======================
+if __name__ == "__main__":
+    # Example 1: Save sample data to SQLite
+    sample = {
+        "product_name": "Harry Potter ve Felsefe Taşı",
+        "product_id": "32780",
+        "url": "https://www.kitapyurdu.com/kitap/harry-potter-ve-felsefe-tasi/32780.html",
+        "current_price": 59.99,
+        "original_price": 79.99,
+        "currency": "TRY",
+        "site": "kitapyurdu",
+        "stock_status": "In Stock",
+        "timestamp": datetime.now(timezone.utc).isoformat()
+    }
+
+    manager = PriceDataManager(database_type="SQLite")
+    manager.save_price_data(sample)
+    print(manager.get_stats())
+
+    # Example 2: Import from JSON (uncomment if needed)
+    # import_from_scraper("prices.json", "PostgreSQL")
+
+    # 🚀 To run Scrapy spider, use command line:
+    #    pip install scrapy
+    #    scrapy runspider price_tracker.py -a name=kitapyurdu
