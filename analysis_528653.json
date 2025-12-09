@@ -1,0 +1,37 @@
+{
+  "product_name": "Beyaz Zambaklar Ülkesinde",
+  "product_id": "528653",
+  "url": "https://www.kitapyurdu.com/kitap/beyaz-zambaklar-ulkesinde/528653.html",
+  "site": "kitapyurdu",
+  "current_price": 32.04,
+  "currency": "TRY",
+  "previous_price": 31.8,
+  "average_price": 32.46,
+  "minimum_price": 31.8,
+  "maximum_price": 33.2,
+  "price_change_percent": 0.75,
+  "price_change_amount": 0.24,
+  "trend_direction": "stable",
+  "alert_level": "good_deal",
+  "recommendation": "👍 GOOD DEAL! Price is 1.3% below average. Good time to buy.",
+  "confidence_score": 0.67,
+  "analysis_date": "2025-12-09T20:48:07.538729",
+  "data_points_count": 30,
+  "strategies": [
+    {
+      "name": "MovingAverage(5,20)",
+      "trend": "stable",
+      "confidence": 0.6
+    },
+    {
+      "name": "PercentageChange(5.0%)",
+      "trend": "stable",
+      "confidence": 0.7
+    },
+    {
+      "name": "VolatilityStrategy(0.08)",
+      "trend": "stable",
+      "confidence": 0.7
+    }
+  ]
+}

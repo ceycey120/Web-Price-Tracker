@@ -1,0 +1,45 @@
+{
+  "chart_type": "line",
+  "title": "Price Trend: Harry Potter ve Felsefe Ta\u015f\u0131",
+  "labels": [
+    "Nov 26",
+    "Nov 27",
+    "Nov 28",
+    "Nov 29",
+    "Nov 30",
+    "Dec 01",
+    "Dec 02",
+    "Dec 03",
+    "Dec 04",
+    "Dec 05",
+    "Dec 06",
+    "Dec 07",
+    "Dec 08",
+    "Dec 09"
+  ],
+  "datasets": [
+    {
+      "label": "Price (TL)",
+      "data": [
+        44.92,
+        45.24,
+        45.57,
+        45.9,
+        46.23,
+        46.56,
+        46.88,
+        44.92,
+        45.24,
+        45.57,
+        45.9,
+        46.23,
+        46.56,
+        46.88
+      ],
+      "borderColor": "rgb(59, 130, 246)",
+      "backgroundColor": "rgba(59, 130, 246, 0.1)",
+      "fill": true,
+      "tension": 0.4
+    }
+  ]
+}

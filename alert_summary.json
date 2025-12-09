@@ -1,0 +1,30 @@
+{
+  "chart_type": "doughnut",
+  "title": "Alert Distribution",
+  "labels": [
+    "critical_drop",
+    "good_deal",
+    "fair_price",
+    "high_price",
+    "warning"
+  ],
+  "datasets": [
+    {
+      "label": "Number of Products",
+      "data": [
+        0,
+        3,
+        0,
+        0,
+        0
+      ],
+      "backgroundColor": [
+        "rgb(239, 68, 68)",
+        "rgb(34, 197, 94)",
+        "rgb(59, 130, 246)",
+        "rgb(245, 158, 11)",
+        "rgb(148, 163, 184)"
+      ]
+    }
+  ]
+}

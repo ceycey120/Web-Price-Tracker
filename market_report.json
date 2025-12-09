@@ -1,0 +1,58 @@
+{
+  "report_date": "2025-12-09T18:47:29.545396",
+  "total_products_analyzed": 1,
+  "market_sentiment": "bearish",
+  "average_price_change": 0.0,
+  "alert_distribution": {
+    "critical_drop": 0,
+    "good_deal": 1,
+    "fair_price": 0,
+    "high_price": 0,
+    "warning": 0
+  },
+  "top_deals": [
+    {
+      "product_name": "Harry Potter ve Felsefe Taşı",
+      "product_id": "32780",
+      "url": "https://www.kitapyurdu.com/kitap/harry-potter-ve-felsefe-tasi/32780.html",
+      "site": "kitapyurdu",
+      "current_price": 59.99,
+      "currency": "TRY",
+      "previous_price": 59.99,
+      "average_price": 59.99,
+      "minimum_price": 59.99,
+      "maximum_price": 59.99,
+      "price_change_percent": 0.0,
+      "price_change_amount": 0.0,
+      "trend_direction": "stable",
+      "alert_level": "good_deal",
+      "recommendation": "👍 GOOD DEAL! Price is 0.0% below average. Good time to buy.",
+      "confidence_score": 0.53,
+      "analysis_date": "2025-12-09T18:47:29.545396",
+      "data_points_count": 4,
+      "strategies": [
+        {
+          "name": "MovingAverage(5,20)",
+          "trend": "stable",
+          "confidence": 0.5
+        },
+        {
+          "name": "PercentageChange(5.0%)",
+          "trend": "stable",
+          "confidence": 0.7
+        },
+        {
+          "name": "VolatilityStrategy(0.08)",
+          "trend": "stable",
+          "confidence": 0.4
+        }
+      ]
+    }
+  ],
+  "most_expensive": [],
+  "recommendations": [
+    "Found 1 good buying opportunities",
+    "0 products are currently overpriced",
+    "Market is down by 0.0% on average"
+  ]
+}

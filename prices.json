@@ -1,0 +1,29 @@
+[
+{
+  "product_name": "Unknown Product",
+  "current_price": 142.0,
+  "original_price": null,
+  "url": "https://www.kitapyurdu.com/kitap/harry-potter-ve-felsefe-tasi/32780.html",
+  "site": "kitapyurdu",
+  "currency": "TRY",
+  "timestamp": "2025-12-08 19:18:26"
+},
+{
+  "product_name": "Unknown Product",
+  "current_price": 85.0,
+  "original_price": null,
+  "url": "https://www.kitapyurdu.com/kitap/harry-potter-ve-efsaneler-kitabi/677276.html",
+  "site": "kitapyurdu",
+  "currency": "TRY",
+  "timestamp": "2025-12-08 19:18:26"
+},
+{
+  "product_name": "Unknown Product",
+  "current_price": 85.0,
+  "original_price": null,
+  "url": "https://www.kitapyurdu.com/kitap/beyaz-zambaklar-ulkesinde/528653.html",
+  "site": "kitapyurdu",
+  "currency": "TRY",
+  "timestamp": "2025-12-08 19:18:28"
+}
+]

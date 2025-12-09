@@ -1,0 +1,45 @@
+{
+  "chart_type": "line",
+  "title": "Price Trend: Apple iPhone 15",
+  "labels": [
+    "Nov 26",
+    "Nov 27",
+    "Nov 28",
+    "Nov 29",
+    "Nov 30",
+    "Dec 01",
+    "Dec 02",
+    "Dec 03",
+    "Dec 04",
+    "Dec 05",
+    "Dec 06",
+    "Dec 07",
+    "Dec 08",
+    "Dec 09"
+  ],
+  "datasets": [
+    {
+      "label": "Price (TL)",
+      "data": [
+        42077.59,
+        42384.73,
+        42691.86,
+        42999.0,
+        43306.14,
+        43613.27,
+        43920.41,
+        42077.59,
+        42384.73,
+        42691.86,
+        42999.0,
+        43306.14,
+        43613.27,
+        43920.41
+      ],
+      "borderColor": "rgb(59, 130, 246)",
+      "backgroundColor": "rgba(59, 130, 246, 0.1)",
+      "fill": true,
+      "tension": 0.4
+    }
+  ]
+}
