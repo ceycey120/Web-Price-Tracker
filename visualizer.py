@@ -273,7 +273,48 @@ class PriceChartVisualizer:
         )
         
         return fig
+    
+    def price_with_moving_average(self, df: pd.DataFrame, product_name: str, window: int = 7) -> go.Figure:
+        """Create price chart with moving average overlay."""
 
+        product_df = df[df['product_name'] == product_name].sort_values('timestamp')
+        if product_df.empty:
+            print(f"No data found for '{product_name}'")
+            return None
+
+        df2 = product_df.copy().set_index('timestamp')
+        df2['ma'] = df2['current_price'].rolling(window=window, min_periods=1).mean()
+
+        fig = go.Figure()
+
+        fig.add_trace(go.Scatter(
+            x=df2.index,
+            y=df2['current_price'],
+            mode='lines+markers',
+            name='Price',
+            line=dict(color='#1f77b4', width=2),
+            hovertemplate='<b>Price</b>: %{y:.2f} TL<extra></extra>'
+        ))
+
+        fig.add_trace(go.Scatter(
+            x=df2.index,
+            y=df2['ma'],
+            mode='lines',
+            name=f'{window}-Day Moving Average',
+            line=dict(color='orange', width=3, dash='dash'),
+            hovertemplate=f'<b>{window}-Day MA</b>: %{{y:.2f}} TL<extra></extra>'
+        ))
+
+        fig.update_layout(
+            title=f"{product_name} — {window}-Day Moving Average",
+            xaxis_title="Date",
+            yaxis_title="Price (TL)",
+            template="plotly_white",
+            hovermode="x unified",
+            height=600
+        )
+
+        return fig
 
 
 # ==================== TABLE VISUALIZER ====================
@@ -414,9 +455,15 @@ class PriceVisualizer:
         
         # Show chart
         if product_name:
+
             fig = self.chart_viz.create_price_history_chart(self.price_df, product_name)
             if fig:
                 fig.show()
+
+            fig_ma = self.chart_viz.price_with_moving_average(self.price_df, product_name)
+            if fig_ma:
+                fig_ma.show()
+                
         else:
             # Show comparison if no specific product
             unique_products = self.price_df['product_name'].unique()[:3]  # Limit to 3
