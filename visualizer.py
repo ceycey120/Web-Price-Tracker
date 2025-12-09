@@ -27,7 +27,7 @@ class ChartConfig:
     theme: str = "plotly_white"
     colors: List[str] = None
     
-    def _post__init__(self):
+    def postinit_(self):
         if self.colors is None:
             self.colors = ["#1f77b4", "#ff7f0e", "#2ca02c", "#d62728", "#9467bd"]
 
@@ -46,7 +46,7 @@ class AnalysisDataLoader:
     """Loads analysis data from Person 3"""
     
     @staticmethod
-    def load_analysis_data(file_path: str = "price_analysis_hp.json") -> Optional[Dict[str, Any]]:
+    def load_analysis_data(file_path: str = "analysis_32780.json") -> Optional[Dict[str, Any]]:
         """Load analysis data from Person 3's JSON output"""
         try:
             with open(file_path, 'r', encoding='utf-8') as f:
@@ -285,25 +285,58 @@ class PriceChartVisualizer:
         df2 = product_df.copy().set_index('timestamp')
         df2['ma'] = df2['current_price'].rolling(window=window, min_periods=1).mean()
 
+        min_price = product_df['current_price'].min()
+        max_price = product_df['current_price'].max()
+
         fig = go.Figure()
 
+        # 1. Ana Fiyat Çizgisi (Çoklu Güncelleme)
         fig.add_trace(go.Scatter(
             x=df2.index,
             y=df2['current_price'],
-            mode='lines+markers',
-            name='Price',
+            
+            # 🚨 KRİTİK DÜZELTME: mode parametresine '+text' eklenmelidir.
+            # Bu, Plotly'ye her noktada metin çizeceğini söyler.
+            mode='lines+markers+text', 
+            
+            name='Current Price',
             line=dict(color='#1f77b4', width=2),
-            hovertemplate='<b>Price</b>: %{y:.2f} TL<extra></extra>'
+            
+            # 🚨 KRİTİK DÜZELTME: text argümanı, her veri noktasına ait fiyatı içerir.
+            text=[f'₺{p:.2f}' for p in df2['current_price']],
+            
+            # 💡 İYİLEŞTİRME: Etiketin konumunu ayarlayın. "top center" genellikle iyidir.
+            textposition="top center", 
+            
+            textfont=dict(color='#1f77b4', size=10)
         ))
 
         fig.add_trace(go.Scatter(
             x=df2.index,
             y=df2['ma'],
-            mode='lines',
-            name=f'{window}-Day Moving Average',
+            mode='lines+markers', # +text EKLEMEK İSTENİRSE BURAYA DA EKLENİR
+            name=f'{window}-Daily Avgrage',
             line=dict(color='orange', width=3, dash='dash'),
-            hovertemplate=f'<b>{window}-Day MA</b>: %{{y:.2f}} TL<extra></extra>'
         ))
+
+        # 3. YATAY MİNİMUM ÇİZGİSİ (Analitik Değer)
+        if min_price != max_price: # Tek bir fiyattan kaçınmak için
+            fig.add_hline(
+            y=min_price,
+            line_dash="dot",
+            line_color="#2ca02c", # Yeşil
+            annotation_text=f"Min Price: {min_price:.2f} TL",
+            annotation_position="bottom left"
+        )
+
+        # 4. YATAY MAKSİMUM ÇİZGİSİ (Analitik Değer)
+        fig.add_hline(
+            y=max_price,
+            line_dash="dot",
+            line_color="#d62728", # Kırmızı
+            annotation_text=f"Max Price: {max_price:.2f} TL",
+            annotation_position="top left"
+        )
 
         fig.update_layout(
             title=f"{product_name} — {window}-Day Moving Average",
@@ -315,7 +348,7 @@ class PriceChartVisualizer:
         )
 
         return fig
-
+    
 
 # ==================== TABLE VISUALIZER ====================
 
@@ -424,20 +457,7 @@ class PriceVisualizer:
         
         # Show table
         print("\nAnalysis Summary:")
-        print(self.table_viz.create_analysis_table(self.analysis_data))
-        
-        # Create and show charts
-        print("\nVisualizations:")
-        
-        # Summary chart
-        fig1 = self.chart_viz.create_analysis_summary_chart(self.analysis_data)
-        if fig1:
-            fig1.show()
-        
-        # Trend indicator
-        fig2 = self.chart_viz.create_trend_indicator(self.analysis_data)
-        if fig2:
-            fig2.show()
+        print(self.table_viz.create_analysis_table(self.analysis_data))   
     
     def show_price_history(self, product_name: str = None):
         """Show price history visualizations"""
@@ -456,20 +476,10 @@ class PriceVisualizer:
         # Show chart
         if product_name:
 
-            fig = self.chart_viz.create_price_history_chart(self.price_df, product_name)
-            if fig:
-                fig.show()
-
             fig_ma = self.chart_viz.price_with_moving_average(self.price_df, product_name)
             if fig_ma:
                 fig_ma.show()
-                
-        else:
-            # Show comparison if no specific product
-            unique_products = self.price_df['product_name'].unique()[:3]  # Limit to 3
-            fig = self.chart_viz.create_comparison_chart(self.price_df, list(unique_products))
-            if fig:
-                fig.show()
+
     
     def show_distribution_analysis(self):
         """Show price distribution analysis"""
@@ -484,11 +494,6 @@ class PriceVisualizer:
         # Show summary table
         print("\Summary Statistics:")
         print(self.table_viz.create_summary_table(self.price_df))
-        
-        # Show distribution chart
-        fig = self.chart_viz.create_price_distribution_chart(self.price_df)
-        if fig:
-            fig.show()
     
     def export_visualizations(self, output_dir: str = "visualizations"):
         """Export all visualizations to files"""
@@ -509,16 +514,22 @@ class PriceVisualizer:
             print(f" Saved: analysis_summary.html")
             print(f" Saved: trend_indicator.html")
         
-        # Export price history charts
+            # Export price history charts
         if not self.price_df.empty:
             unique_products = self.price_df['product_name'].unique()
-            for product in unique_products[:2]:  # Export first 2 products
-                fig = self.chart_viz.create_price_history_chart(self.price_df, product)
+            for product in unique_products[:2]: # Export first 2 products
+                
+                # fig = self.chart_viz.create_price_history_chart(self.price_df, product) # <--- SİLİNECEK
+                
+                # 💡 YERİNE EKLE: Hareketli Ortalama grafiğini kaydedeceğiz.
+                fig = self.chart_viz.price_with_moving_average(self.price_df, product)
+                
+                # Dosya kaydetme mantığı aynı kalır.
                 safe_name = product.replace(" ", "_").lower()
                 fig.write_html(f"{output_dir}/history_{safe_name}.html")
                 print(f" Saved: history_{safe_name}.html")
-        
-        print(f"\nAll visualizations exported to '{output_dir}/'")
+            
+            print(f"\nAll visualizations exported to '{output_dir}/'")
     
     def generate_report(self):
         """Generate comprehensive visualization report"""
