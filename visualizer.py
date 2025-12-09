@@ -27,7 +27,8 @@ class ChartConfig:
     theme: str = "plotly_white"
     colors: List[str] = None
     
-    def postinit_(self):
+    def __post_init__(self):
+        # 💡 NOTE: Ensure default colors if not provided
         if self.colors is None:
             self.colors = ["#1f77b4", "#ff7f0e", "#2ca02c", "#d62728", "#9467bd"]
 
@@ -72,20 +73,46 @@ class AnalysisDataLoader:
     def load_price_history_from_db() -> pd.DataFrame:
         """
         Load price history from Person 2's database
-        In real implementation, this would connect to the database
+        Compatible with both price_with_moving_average() and create_site_comparison_bar_chart().
+        Now includes 3 timestamps per site for smoother moving average.
         """
-        # Mock data for demonstration
         data = {
-            "product_name": ["Harry Potter", "Harry Potter", "Harry Potter", "iPhone", "iPhone", "iPhone"],
-            "product_id": ["32780", "32780", "32780", "HBC00004E3WIR", "HBC00004E3WIR", "HBC00004E3WIR"],
-            "site": ["kitapyurdu", "kitapyurdu", "kitapyurdu", "hepsiburada", "hepsiburada", "hepsiburada"],
-            "current_price": [59.99, 62.50, 55.00, 45999.99, 44999.99, 46999.99],
+            "product_name": [
+                "Harry Potter"]*12 + ["iPhone"]*12,
+            "product_id": [
+                "32780"]*12 + ["HBC00004E3WIR"]*12,
+            "site": [
+                "kitapyurdu", "kitapyurdu", "kitapyurdu",
+                "d&r", "d&r", "d&r",
+                "idefix", "idefix", "idefix",
+                "bkm", "bkm", "bkm",
+                "hepsiburada", "hepsiburada", "hepsiburada",
+                "trendyol", "trendyol", "trendyol",
+                "n11", "n11", "n11",
+                "amazon", "amazon", "amazon"
+            ],
+            "current_price": [
+                59.99, 61.50, 60.50,
+                60.00, 62.00, 61.50,
+                58.00, 59.50, 58.50,
+                60.00, 61.00, 60.50,
+                45999.99, 44999.99, 45500.00,
+                45000.00, 45500.00, 45200.00,
+                47000.00, 46800.00, 46900.00,
+                46500.00, 46650.00, 46700.00
+            ],
             "timestamp": [
+                "2024-01-10T10:00:00", "2024-01-11T10:00:00", "2024-01-12T10:00:00",
+                "2024-01-10T10:00:00", "2024-01-11T10:00:00", "2024-01-12T10:00:00",
+                "2024-01-10T10:00:00", "2024-01-11T10:00:00", "2024-01-12T10:00:00",
+                "2024-01-10T10:00:00", "2024-01-11T10:00:00", "2024-01-12T10:00:00",
+                "2024-01-10T10:00:00", "2024-01-11T10:00:00", "2024-01-12T10:00:00",
+                "2024-01-10T10:00:00", "2024-01-11T10:00:00", "2024-01-12T10:00:00",
                 "2024-01-10T10:00:00", "2024-01-11T10:00:00", "2024-01-12T10:00:00",
                 "2024-01-10T10:00:00", "2024-01-11T10:00:00", "2024-01-12T10:00:00"
             ]
         }
-        
+
         df = pd.DataFrame(data)
         df['timestamp'] = pd.to_datetime(df['timestamp'])
         return df
@@ -275,80 +302,88 @@ class PriceChartVisualizer:
         return fig
     
     def price_with_moving_average(self, df: pd.DataFrame, product_name: str, window: int = 7) -> go.Figure:
-        """Create price chart with moving average overlay."""
-
-        product_df = df[df['product_name'] == product_name].sort_values('timestamp')
+        """Create price chart with moving average overlay for each site, with consistent colors."""
+        
+        product_df = df[df['product_name'] == product_name].sort_values(['site', 'timestamp'])
         if product_df.empty:
             print(f"No data found for '{product_name}'")
             return None
-
-        df2 = product_df.copy().set_index('timestamp')
-        df2['ma'] = df2['current_price'].rolling(window=window, min_periods=1).mean()
-
-        min_price = product_df['current_price'].min()
-        max_price = product_df['current_price'].max()
-
+        
         fig = go.Figure()
-
-        # 1. Ana Fiyat Çizgisi (Çoklu Güncelleme)
-        fig.add_trace(go.Scatter(
-            x=df2.index,
-            y=df2['current_price'],
+        
+        # Assign a color per site
+        site_colors = px.colors.qualitative.Set2
+        sites = product_df['site'].unique()
+        color_map = {site: site_colors[i % len(site_colors)] for i, site in enumerate(sites)}
+        
+        # Plot each site separately
+        for site, site_df in product_df.groupby('site'):
+            site_df = site_df.set_index('timestamp').sort_index()
+            site_df['ma'] = site_df['current_price'].rolling(window=window, min_periods=1).mean()
+            color = color_map[site]
             
-            # 🚨 KRİTİK DÜZELTME: mode parametresine '+text' eklenmelidir.
-            # Bu, Plotly'ye her noktada metin çizeceğini söyler.
-            mode='lines+markers+text', 
+            # Main price line for the site
+            fig.add_trace(go.Scatter(
+                x=site_df.index,
+                y=site_df['current_price'],
+                mode='lines+markers+text',
+                name=f"{site} Price",
+                text=[f"₺{p:.2f}" for p in site_df['current_price']],
+                textposition="top center",
+                textfont=dict(color='black', size=9),
+                line=dict(color=color)
+            ))
             
-            name='Current Price',
-            line=dict(color='#1f77b4', width=2),
-            
-            # 🚨 KRİTİK DÜZELTME: text argümanı, her veri noktasına ait fiyatı içerir.
-            text=[f'₺{p:.2f}' for p in df2['current_price']],
-            
-            # 💡 İYİLEŞTİRME: Etiketin konumunu ayarlayın. "top center" genellikle iyidir.
-            textposition="top center", 
-            
-            textfont=dict(color='#1f77b4', size=10)
-        ))
-
-        fig.add_trace(go.Scatter(
-            x=df2.index,
-            y=df2['ma'],
-            mode='lines+markers', # +text EKLEMEK İSTENİRSE BURAYA DA EKLENİR
-            name=f'{window}-Daily Avgrage',
-            line=dict(color='orange', width=3, dash='dash'),
-        ))
-
-        # 3. YATAY MİNİMUM ÇİZGİSİ (Analitik Değer)
-        if min_price != max_price: # Tek bir fiyattan kaçınmak için
-            fig.add_hline(
-            y=min_price,
-            line_dash="dot",
-            line_color="#2ca02c", # Yeşil
-            annotation_text=f"Min Price: {min_price:.2f} TL",
-            annotation_position="bottom left"
-        )
-
-        # 4. YATAY MAKSİMUM ÇİZGİSİ (Analitik Değer)
-        fig.add_hline(
-            y=max_price,
-            line_dash="dot",
-            line_color="#d62728", # Kırmızı
-            annotation_text=f"Max Price: {max_price:.2f} TL",
-            annotation_position="top left"
-        )
-
+            # Moving average line for the site
+            fig.add_trace(go.Scatter(
+                x=site_df.index,
+                y=site_df['ma'],
+                mode='lines',
+                name=f"{site} {window}-Day MA",
+                line=dict(dash='dash', color=color)
+            ))
+        
         fig.update_layout(
-            title=f"{product_name} — {window}-Day Moving Average",
+            title=f"{product_name} — Price History & {window}-Day Moving Average by Site",
             xaxis_title="Date",
             yaxis_title="Price (TL)",
-            template="plotly_white",
             hovermode="x unified",
+            template="plotly_white",
             height=600
         )
 
         return fig
+
     
+    def create_site_comparison_bar_chart(self, df: pd.DataFrame, product_name: str) -> go.Figure:
+        """Compare the same product's price across different sites in a bar chart."""
+        
+        product_df = df[df['product_name'] == product_name].sort_values('timestamp')
+        
+        if product_df.empty:
+            print(f"No data found for '{product_name}'")
+            return None
+        
+        # Take the latest price per site
+        latest_df = product_df.groupby('site').tail(1)
+        
+        fig = go.Figure(go.Bar(
+            x=latest_df['site'],
+            y=latest_df['current_price'],
+            marker_color="#1f77b4",
+            text=[f"₺{p:.2f}" for p in latest_df['current_price']],
+            textposition="auto"
+        ))
+        
+        fig.update_layout(
+            title=f"{product_name} — Price Comparison Across Sites",
+            xaxis_title="Site",
+            yaxis_title="Price (TL)",
+            template="plotly_white",
+            height=500
+        )
+        
+        return fig
 
 # ==================== TABLE VISUALIZER ====================
 
@@ -479,7 +514,6 @@ class PriceVisualizer:
             fig_ma = self.chart_viz.price_with_moving_average(self.price_df, product_name)
             if fig_ma:
                 fig_ma.show()
-
     
     def show_distribution_analysis(self):
         """Show price distribution analysis"""
@@ -492,7 +526,7 @@ class PriceVisualizer:
         print("=" * 40)
         
         # Show summary table
-        print("\Summary Statistics:")
+        print("\nSummary Statistics:")
         print(self.table_viz.create_summary_table(self.price_df))
     
     def export_visualizations(self, output_dir: str = "visualizations"):
@@ -530,6 +564,27 @@ class PriceVisualizer:
                 print(f" Saved: history_{safe_name}.html")
             
             print(f"\nAll visualizations exported to '{output_dir}/'")
+
+    def show_site_comparison(self, product_name: str):
+        """Show bar chart comparing the same product across different sites"""
+        
+        if self.price_df.empty:
+            print("No price history data available")
+            return
+        
+        print(f"\nSITE COMPARISON FOR PRODUCT: {product_name}")
+        print("=" * 40)
+        
+        # Show chart
+        fig = self.chart_viz.create_site_comparison_bar_chart(self.price_df, product_name)
+        if fig:
+            fig.show()
+        
+        # Optional: show table of latest prices per site
+        latest_df = self.price_df[self.price_df['product_name'] == product_name].sort_values('timestamp')
+        latest_prices = latest_df.groupby('site').tail(1)
+        print("\nLatest Prices by Site:")
+        print(self.table_viz.create_price_history_table(latest_prices))
     
     def generate_report(self):
         """Generate comprehensive visualization report"""
@@ -541,11 +596,15 @@ class PriceVisualizer:
         # 1. Analysis Dashboard
         self.show_analysis_dashboard()
         
-        # 2. Price History
+        # 2. Price History & Site Comparison
         if not self.price_df.empty:
             unique_products = self.price_df['product_name'].unique()
             for product in unique_products[:2]:  # Show first 2 products
+                # Show price history charts/tables
                 self.show_price_history(product)
+                
+                # Show site comparison for the same product
+                self.show_site_comparison(product)
         
         # 3. Distribution Analysis
         self.show_distribution_analysis()
@@ -556,6 +615,7 @@ class PriceVisualizer:
         print("\n" + "=" * 60)
         print("Visualization report completed!")
         print("=" * 60)
+
 
 # ==================== MAIN EXECUTION ====================
 
