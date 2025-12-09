@@ -3,7 +3,7 @@ This is a project that provides comprehensive visualization and analysis of prod
 
 # Features
 - Load analysis data from JSON outputs and price history from database.
-- Interactive and static visualizations using Plotly, Matplotlib, and Seaborn.
+- Interactive and static visualizations using `plotly`, `matplotlib`, and `seaborn`.
 - Price history visualization with moving average overlays.
 - Site comparison charts and price distribution analysis.
 - Trend indicators and alerts based on price changes.
