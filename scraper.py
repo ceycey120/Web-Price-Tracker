@@ -237,7 +237,7 @@ class BasePriceSpider(scrapy.Spider, ABC):
 
     def _create_scrapy_item(
         self, info: ProductInfo
-    ) -> PriceItem:  # Dict yerine PriceItem kullan
+    ) -> PriceItem:  # Use PriceItem instead of Dict
         """Convert ProductInfo to Scrapy Item object"""
         item = PriceItem(
             product_name=info.name,
@@ -252,7 +252,7 @@ class BasePriceSpider(scrapy.Spider, ABC):
         )
         return item
 
-    # parse metodu içinde yield dönüşü PriceItem olmalı
+    # In the parse method, the yield return should be PriceItem.
     def parse(self, response: scrapy.http.Response):
         """Main parsing method"""
         try:
@@ -267,7 +267,7 @@ class BasePriceSpider(scrapy.Spider, ABC):
 import re
 from typing import Optional, List, Any, Dict
 
-# İhtiyaç duyulan ekstra import'ları ekleyin (eğer dataclasses kullanıyorsanız)
+# Add any extra imports needed (if you are using dataclasses)
 # from dataclasses import dataclass, field
 
 
@@ -277,7 +277,6 @@ class PriceProcessor:
     def __init__(self, *args, **kwargs):
         self._processors = []
 
-        # ... (Ayarlarla ilgili kısımları olduğu gibi bırakın)
         if args and isinstance(args[0], str):
             self._setup_from_string(args[0])
         elif kwargs.get("config_file"):
@@ -285,12 +284,10 @@ class PriceProcessor:
         elif kwargs.get("config_dict"):
             self._setup_from_dict(kwargs["config_dict"])
 
-    # 1. ENTEGRASYON DÜZELTMESİ: Testlerinizin beklediği metodu ekliyoruz.
     def normalize_price(self, price_text: str) -> Optional[float]:
         """Testlerin beklediği arayüz. process_price'ı çağırır."""
         return self.process_price(price_text)
 
-    # 2. TYPE ERROR DÜZELTMESİ: **kwargs alt metotlara İLETİLMEYECEK.
     def process_price(self, price_text: str, **kwargs) -> Optional[float]:
         """Process price text with multiple strategies"""
         processors = [
@@ -299,20 +296,19 @@ class PriceProcessor:
             self._extract_with_findall,
         ]
 
-        # Eğer indirim varsa, önce fiyatı alıp sonra indirimi uygulayacağız.
+        #If there's a discount, we'll get the price first and then apply the discount.
         discount = kwargs.get("discount", 0)
 
         for processor in processors:
-            # Artık **kwargs İLETİLMİYOR, sadece price_text gönderiliyor.
+            # **kwargs** are no longer being sent; only price_text is being sent.
             result = processor(price_text)
             if result is not None:
-                # Eğer indirim varsa uygula
+                # Apply the discount if available.
                 if discount > 0:
                     result *= 1 - discount / 100
                 return result
         return None
 
-    # Alt metotlardan **kwargs kaldırıldı
     def _extract_with_regex(
         self, text: str, pattern: str = r"[\d,.]+"
     ) -> Optional[float]:
@@ -322,18 +318,16 @@ class PriceProcessor:
             return self._clean_number(match.group())
         return None
 
-    # Alt metotlardan **kwargs kaldırıldı
     def _extract_with_split(self, text: str, separator: str = " ") -> Optional[float]:
         """Extract price by splitting text"""
         for part in text.split(separator):
             try:
-                # Float'a dönüştürmeden önce temizleme yapıldığından emin olun
+                # Ensure that cleaning is performed before converting to float.
                 return self._clean_number(part)
             except (ValueError, TypeError):
                 continue
         return None
 
-    # Alt metotlardan **kwargs kaldırıldı
     def _extract_with_findall(self, text: str) -> Optional[float]:
         """Extract price using findall"""
         numbers = re.findall(r"[\d,.]+", text)
@@ -341,35 +335,35 @@ class PriceProcessor:
             return self._clean_number(numbers[0])
         return None
 
-    # 3. FİYAT TEMİZLEME MANTIĞI DÜZELTMESİ: Binlik ve ondalık ayırıcıları doğru işler.
+    # 3. PRICE CLEANING LOGIC CORRECTION: It correctly processes thousands and decimal separators.
     def _clean_number(self, text: str) -> Optional[float]:
         """Clean and convert number string to float, handling TL/Avrupa format (1.000,99)"""
         text = text.strip()
 
-        # Sayı olmayan karakterleri (para birimleri hariç) kaldır
+        # Remove non-numeric characters (excluding currency characters)
         cleaned_text = re.sub(r"[^\d.,]", "", text)
 
-        # 1. Önce para birimi sembollerini kaldırın (opsiyonel)
+        # 1. First, remove the currency symbols
         cleaned_text = cleaned_text.replace("₺", "").replace("TL", "").replace("$", "")
 
-        # 2. Hem nokta hem de virgül var mı? (Örn: 1.000,99)
+        # 2. Are there both periods and commas? (e.g., 1.000,99)
         if cleaned_text.count(".") > 0 and cleaned_text.count(",") > 0:
             if cleaned_text.rfind(".") < cleaned_text.rfind(","):
-                # Binlik ayırıcıyı kaldır, ondalık ayırıcıyı nokta yap (Türkçe/Avrupa formatı)
+                # Remove the thousands separator and replace the decimal separator with a dot (Turkish/European format)
                 cleaned_text = cleaned_text.replace(".", "").replace(",", ".")
             else:
-                # Ondalık ayırıcı nokta, binlik ayırıcı virgül (ABD formatı)
+                # Decimal separator, thousands separator (US format)
                 cleaned_text = cleaned_text.replace(",", "")
 
-        # 3. Sadece virgül varsa (Örn: 100,50)
+        # 3.If there is only a comma (e.g., 100.50)
         elif cleaned_text.count(",") > 0:
             cleaned_text = cleaned_text.replace(",", ".")
 
         try:
-            # Sadece bir nokta kalmalı (ondalık ayırıcı)
+            # Only one dot should remain (decimal separator)
             return float(cleaned_text)
         except ValueError:
-            return None  # float'a dönüştürülemezse None dön
+            return None  # If it cannot be converted to float, it returns None.
 
     def _setup_from_string(self, config_str: str):
         pass
@@ -389,20 +383,20 @@ class AdvancedPriceProcessor(PriceProcessor):
         self.currency_symbols = {"₺", "TL", "USD", "€", "£", "$"}
 
 
-# scraper.py (AdvancedPriceProcessor sınıfı içinde)
+# scraper.py (Within the AdvancedPriceProcessor class)
 
 
 class AdvancedPriceProcessor(PriceProcessor):
 
     def process_price(self, price_text: str, **kwargs) -> Optional[float]:
-        discount = kwargs.pop("discount", 0)  # Discount'ı kwargs'tan çıkar
+        discount = kwargs.pop("discount", 0)  # Remove the discount from kwargs.
 
-        # Fiyatı üst sınıftan (PriceProcessor) al.
-        # super().process_price'a discount=0 veya hiç discount gönderme
-        # Eğer PriceProcessor'da indirim mantığı varsa, onu pasifize et.
+        # Choose the price from the top-tier (PriceProcessor).
+        # Don't send discount=0 or no discount to super().process_price
+        # If PriceProcessor has a discount logic, disable it.
         price = super().process_price(
             price_text
-        )  # VEYA super().process_price(price_text, discount=0)
+        )  # OR super().process_price(price_text, discount=0)
 
         if price is not None and discount > 0:
             return price * (1 - discount / 100)
@@ -410,14 +404,14 @@ class AdvancedPriceProcessor(PriceProcessor):
         return price
 
 
-class PriceValidatorImpl:  # Eğer PriceValidator'dan miras alıyorsanız (Inheritance)
+class PriceValidatorImpl:  #If you are inheriting from PriceValidator
     """Implementation of price validator"""
 
     def __init__(self, min_price: float = 0.01, max_price: float = 1000000):
         self.min_price = min_price
         self.max_price = max_price
 
-        # 1. DÜZELTME: PriceProcessor'ı dahil et (Composition)
+        #Include PriceProcessor (Composition)
         self.processor = PriceProcessor()
 
     def validate_price(self, price_info: ProductInfo) -> bool:
@@ -431,7 +425,7 @@ class PriceValidatorImpl:  # Eğer PriceValidator'dan miras alıyorsanız (Inher
         if price_info.current_price > self.max_price:
             return False
 
-        # Bu mantıkta bir hata var: Orijinal fiyat, güncel fiyattan küçük olamaz.
+        # The original price cannot be lower than the current price.
         if (
             price_info.original_price
             and price_info.original_price < price_info.current_price
@@ -446,17 +440,18 @@ class PriceValidatorImpl:  # Eğer PriceValidator'dan miras alıyorsanız (Inher
         """
         Normalize price text to float.
 
-        Bu metot, PriceProcessor'daki temizleme mantığını devralır
-        (composition/delegation) ve kendi karmaşık temizleme mantığını kullanmaz.
+        This method inherits the cleanup logic (composition/delegation) from PriceProcessor 
+        and does not use its own complex cleanup logic.
 
-        NOT: Bu metotun çalışması için self.processor = PriceProcessor()
-            ifadesinin PriceValidatorImpl'in __init__ metodunda tanımlanmış olması gerekir.
+        NOTE: For this method to work, the expression self.processor = PriceProcessor() must 
+        be defined in the __init__ method of PriceValidatorImpl.
         """
+
         if not hasattr(self, "processor"):
 
             return None
 
-        # 1. Adım: Tüm sembolleri, boşlukları vb. kaldır
+        #Step 1: Remove all symbols, spaces, etc.
         cleaned = price_text.strip()
         patterns_to_remove = [
             "TL",
@@ -474,32 +469,32 @@ class PriceValidatorImpl:  # Eğer PriceValidator'dan miras alıyorsanız (Inher
         for pattern in patterns_to_remove:
             cleaned = cleaned.replace(pattern, "")
 
-        # 2. Adım: Sayısal parçayı bul
+        # Step 2: Find the numerical part.
         numbers = re.findall(r"[\d,.]+", cleaned)
         if not numbers:
             return None
         number_str = numbers[0]
 
-        # 3. Adım: Türkçe/Avrupa Formatı Düzeltme Mantığı (1.000,99 -> 1000.99)
+        #Step 3: Turkish/European Format Correction Logic (1,000.99 -> 1,000.99)
         if number_str.count(".") > 0 and number_str.count(",") > 0:
             if number_str.rfind(".") < number_str.rfind(","):
-                # Binlik ayırıcıyı kaldır, ondalık ayırıcıyı noktaya çevir
+                # Remove the thousands separator and change the decimal separator to a dot.
                 number_str = number_str.replace(".", "").replace(",", ".")
-            # Aksi halde (ABD formatı) virgülü kaldır
+            # Otherwise (US format) remove the comma.
             else:
                 number_str = number_str.replace(",", "")
 
-        # 4. Adım: Sadece virgül varsa noktaya çevir (50,99 -> 50.99)
+        # Step 4: Convert to a period if only a comma exists (50,99 -> 50.99)
         elif number_str.count(",") == 1:
             number_str = number_str.replace(",", ".")
 
-        # 5. Adım: Float'a çevir
+        # Step 5: Convert to Float
         try:
             return float(number_str)
         except ValueError:
             return None
 
-        # Eğer self.processor mevcutsa, temizleme görevini ona devret (En iyi pratik budur)
+        # If self.processor exists, delegate the cleanup task to it (this is best practice)
         return self.processor.normalize_price(price_text)
 
 
@@ -632,43 +627,43 @@ class AmazonSpider(BasePriceSpider):
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
-        # Personel 1'in kullandığı PriceProcessor'ı kullan
+        # Use the PriceProcessor used by Staff 1.
         self.price_processor = AdvancedPriceProcessor()
-        # Amazon'un fiyat aralığı genellikle daha geniştir
+        # Amazon generally has a wider price range.
         self.validator = PriceValidatorImpl(max_price=500000)
 
     def get_default_urls(self) -> List[str]:
         return [
-            # Örnek bir Amazon ürünü
+            # An example of an Amazon product
             "https://www.amazon.com.tr/Apple-AirPods-Nesil-Şarj-Kutusu/dp/B0BDK6Z2C3"
         ]
 
     def parse_product_page(self, response: scrapy.http.Response) -> ProductInfo:
         """Parse Amazon.com.tr product page"""
 
-        # 1. Ürün Adı Seçicisi (En yaygın Amazon seçicisi)
+        #1. Product Name Picker (The most common Amazon picker)
         name_selectors = [
-            "#productTitle::text",  # Ana ürün başlığı
+            "#productTitle::text",
             "#title::text",
         ]
         product_name = self._extract_text(
             response, name_selectors, "Unknown Product"
         ).strip()
 
-        # 2. Güncel Fiyat Seçicileri (Amazon, fiyatları farklı yerlerde saklayabilir)
+        #2. Current Price Selectors (Amazon may store prices in different locations)
         price_selectors = [
-            ".a-offscreen::text",  # Gizli span'lardaki fiyatlar (en sık)
+            ".a-offscreen::text",  # Prices in hidden spans (most common)
             "#priceblock_ourprice::text",
             "#priceblock_saleprice::text",
-            "#apex_desktop .a-price-whole::text",  # Yeni fiyat yapısı
-            "#corePrice_feature_div .a-offscreen::text",  # En güncel ve kapsamlı (tercih edilen)
+            "#apex_desktop .a-price-whole::text",  # New price structure
+            "#corePrice_feature_div .a-offscreen::text",  # The most up-to-date and comprehensive (preferred)
         ]
         price_text = self._extract_text(response, price_selectors)
         current_price = (
             self.price_processor.process_price(price_text) if price_text else 0.0
         )
 
-        # 3. Eski/Orijinal Fiyat Seçicileri
+        #3. Old/Original Price Selectors
         original_price_selectors = [
             ".a-text-price .a-offscreen::text",
             ".priceBlockStrikeThrough::text",
@@ -686,7 +681,7 @@ class AmazonSpider(BasePriceSpider):
             original_price=original_price,
             url=response.url,
             site=self.name,
-            currency="TRY",  # Amazon.com.tr için varsayılan
+            currency="TRY",  #Default for Amazon.com.tr
             stock_status=self._extract_stock_status(response),
             product_id=self._extract_product_id(response.url),
             timestamp=datetime.now(),
@@ -703,7 +698,7 @@ class AmazonSpider(BasePriceSpider):
         return default
 
     def _extract_stock_status(self, response: scrapy.http.Response) -> str:
-        """Amazon stok durumu tespiti"""
+        """Amazon stock availability check"""
         stock_text = response.css("#availability span::text").get()
         if stock_text and "stokta" in stock_text.lower():
             return StockStatus.IN_STOCK.value
@@ -712,8 +707,8 @@ class AmazonSpider(BasePriceSpider):
         return StockStatus.UNKNOWN.value
 
     def _extract_product_id(self, url: str) -> Optional[str]:
-        """ASIN ID'yi URL'den çıkar (örnek: B0BDK6Z2C3)"""
-        # Genellikle /dp/ veya /gp/product/ sonrasında 10 karakterli ASIN ID bulunur
+        """Extract the ASIN ID from the URL (example: B0BDK6Z2C3)"""
+        # Typically, a 10-character ASIN ID is found after /dp/ or /gp/product/.
         match = re.search(r"(?:/dp/|/gp/product/)(\w{10})", url)
         return match.group(1) if match else None
 

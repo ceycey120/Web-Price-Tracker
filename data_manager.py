@@ -1,9 +1,9 @@
 """
-PROFESSIONAL PRICE COLLECTOR - Birleştirilmiş Sistem
-Personel 1 (Scraper) ve Personel 2 (Data Manager) Kodlarının Entegre Hali.
+PROFESSIONAL PRICE COLLECTOR - Unified System
+Integrated version of Personnel 1 (Scraper) and Personnel 2 (Data Manager) Codes.
 
-Destekler: KitapYurdu, Hepsiburada, Amazon.com.tr
-Veritabanı: SQLAlchemy ORM (SQLite, PostgreSQL) ve MongoDB Desteği.
+Supported by: KitapYurdu, Hepsiburada, Amazon.com.tr
+Database: SQLAlchemy ORM (SQLite, PostgreSQL) and MongoDB Support.
 """
 
 import scrapy
@@ -37,9 +37,9 @@ from sqlalchemy import (
 )
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import sessionmaker, relationship
-import pymongo  # MongoDB desteği için
+import pymongo  # For MongoDB support
 
-# SQLAlchemy uyarısını görmezden gelmek için
+# To ignore the SQLAlchemy warning
 sa.exc.MovedIn20Warning.warn_if_needed = lambda *a, **kw: None
 
 Base = declarative_base()
@@ -68,9 +68,9 @@ class ProductInfo:
     def to_dict(self) -> Dict[str, Any]:
         """Convert to dictionary for DB persistence"""
         data = asdict(self)
-        # Datetime objesini ISO formatına dönüştür (JSON/DB uyumluluğu)
+        # Convert the DateTime object to ISO format (JSON/DB compatibility)
         data["timestamp"] = self.timestamp.isoformat()
-        data["product_name"] = data.pop("name")  # DataManager'ın beklediği anahtar
+        data["product_name"] = data.pop("name")  # The key that DataManager is waiting for.
         return {k: v for k, v in data.items() if v is not None}
 
 
@@ -96,7 +96,7 @@ class PriceItem(Item):
 class Product(Base):
     """Represents each unique product in the database."""
 
-    __tablename__ = "products"  # Düzeltme: _tablename_ -> __tablename__
+    __tablename__ = "products" 
 
     id = Column(Integer, primary_key=True, autoincrement=True)
     product_id = Column(String(100), index=True)
@@ -114,13 +114,13 @@ class Product(Base):
 
 
 class PriceHistory(Base):
-    """Keeps price history of products. (Nihai ve Doğru Model)"""
+    """Keeps price history of products."""
 
     __tablename__ = "price_history"
 
     id = Column(Integer, primary_key=True, autoincrement=True)
 
-    # Foreign Key: Ürünün ana ID'sine bağlanır.
+    # Foreign Key: Linked to the product's main ID.
     product_base_id = Column(
         Integer, ForeignKey("products.id"), nullable=False, index=True
     )
@@ -149,7 +149,7 @@ class AdvancedPriceProcessor:
     def _clean_number(self, text: str) -> float:
         """Clean and convert number string to float"""
         cleaned = text.replace(",", ".").replace(" ", "")
-        # Birden fazla nokta varsa, ilk noktadan sonrasını ondalık kabul et
+        # If there is more than one decimal point, treat everything after the first decimal point as a decimal.
         parts = cleaned.split(".")
         if len(parts) > 2:
             cleaned = parts[0] + "." + "".join(parts[1:])
@@ -166,7 +166,7 @@ class AdvancedPriceProcessor:
             for symbol in self.currency_symbols:
                 price_text = price_text.replace(symbol, "")
 
-        # Regex ile sadece sayıları ve ondalık işaretini al
+        # Using Regex to retrieve only numbers and their decimal point
         numbers = re.findall(r"[\d,.]+", price_text)
         if numbers:
             try:
@@ -195,10 +195,10 @@ def _extract_text(
 class PriceDataManager:
     """Personel 2: Data Storage Manager"""
 
-    # __init__ metodunun adındaki hatayı düzelt
+   # Correct the error in the name of the __init__ method.
     def __init__(
         self, database_type="SQLite", database_name="price_tracker_V2"
-    ):  # Değiştirildi!
+    ): 
         self.database_type = database_type
         self.database_name = database_name
         print(f"Setting up {database_type} database...")
@@ -259,7 +259,7 @@ class PriceDataManager:
         with self.get_db_session() as db:
             clean_url = data["url"].strip()
 
-            # 1. Product (Ürün) Kaydı
+            # 1. Product Registration
             product = db.query(Product).filter_by(url=clean_url).first()
             if not product:
                 product = Product(
@@ -271,9 +271,9 @@ class PriceDataManager:
                     image_url=data.get("image_url"),
                 )
                 db.add(product)
-                db.flush()  # ID almak için zorunlu
+                db.flush()  # Required to obtain an ID
 
-            # 2. PriceHistory (Fiyat Geçmişi) Kaydı
+            #2. PriceHistory Record
             ts_str = data["timestamp"]
             if isinstance(ts_str, str):
                 if ts_str.endswith("Z"):
@@ -284,7 +284,7 @@ class PriceDataManager:
                 ts = ts_str
 
             price_record = PriceHistory(
-                product_base_id=product.id,  # Foreign Key tanımlı olmadığı için yorum satırı yapıldı
+                product_base_id=product.id,  # A comment was added because the Foreign Key is not defined.
                 current_price=float(data["current_price"]),
                 original_price=(
                     float(data["original_price"])
@@ -301,7 +301,7 @@ class PriceDataManager:
             return True
 
     def _save_to_mongodb(self, data: Dict[str, Any]) -> bool:
-        # Kişi 2'nin orijinal kodu kullanılabilir (Mongo için uygundur)
+        # Person 2's original code is available (suitable for Mongo))
         products_col = self.db["products"]
         prices_col = self.db["price_history"]
 
@@ -384,7 +384,7 @@ class BasePriceSpider(scrapy.Spider, ABC):
         try:
             product_info = self.parse_product_page(response)
             if product_info and product_info.current_price > 0:
-                # Doğrudan Pipeline'a Item olarak gönder
+                # Send directly to Pipeline as an Item
                 yield self._create_scrapy_item(product_info)
             else:
                 self.logger.warning(
@@ -526,7 +526,7 @@ class AmazonSpider(BasePriceSpider):
         name_selectors = ["#productTitle::text"]
         product_name = _extract_text(response, name_selectors, "Unknown Product")
 
-        # Güncel Fiyat: Genellikle .a-offscreen içinde gizlidir
+        # Current Price: Usually hidden within .a-offscreen
         price_selectors = [
             "#corePrice_feature_div .a-offscreen::text",
             ".a-price-whole::text",
@@ -536,7 +536,7 @@ class AmazonSpider(BasePriceSpider):
             self.price_processor.process_price(price_text) if price_text else 0.0
         )
 
-        # Orijinal Fiyat: Çizili fiyat
+        # Original Price: Crossed-out price
         original_price_selectors = [".a-text-price .a-offscreen::text"]
         original_price_text = _extract_text(response, original_price_selectors)
         original_price = (
@@ -545,11 +545,11 @@ class AmazonSpider(BasePriceSpider):
             else None
         )
 
-        # ASIN ID'yi URL'den al (10 karakterli)
+        # Get ASIN ID from URL (10 characters)
         product_id_match = re.search(r"(?:/dp/|/gp/product/)(\w{10})", response.url)
         product_id = product_id_match.group(1) if product_id_match else None
 
-        # Stok durumu (basitleştirilmiş)
+        # Stock status (simplified)
         stock_text = response.css("#availability span::text").get(default="").lower()
         stock_status = (
             "In Stock"
@@ -574,30 +574,30 @@ class AmazonSpider(BasePriceSpider):
 
 
 class DatabasePipeline:
-    """CRITICAL: Item'ları doğrudan DataManager'a kaydetmek için Pipeline"""
+    """CRITICAL: Pipeline for saving items directly to DataManager"""
 
     def __init__(self, db_manager: PriceDataManager):
         self.db_manager = db_manager
 
     @classmethod
     def from_crawler(cls, crawler):
-        # YENİ MANTIK: Bağlantı tipini (string) settings'ten alın.
+        #Get the connection type (string) from the settings.
         db_type = crawler.settings.get("DB_CONNECTION_TYPE", "SQLite")
 
-        # Modül nesnelerini kopyalama hatasını önlemek için burada PriceDataManager nesnesini oluşturun.
+        #To avoid errors in copying module objects, create the PriceDataManager object here.
         try:
             db_manager = PriceDataManager(database_type=db_type)
         except Exception as e:
-            # Eğer bağlantı başarısız olursa, bir hata fırlatın.
+            # If the connection fails, throw an error.
             raise ValueError(f"Failed to initialize PriceDataManager in Pipeline: {e}")
 
         return cls(db_manager)
 
     def process_item(self, item, spider):
-        # Scrapy Item'ı, DataManager'ın beklediği dict formatına dönüştür
+        # Convert the Scrapy Item to the dict format that DataManager expects.
         item_dict = dict(item)
 
-        # Personel 2'nin beklediği formatta kaydet
+        # Save in the format expected by Staff 2.
         success = self.db_manager.save_price_data(item_dict)
 
         if not success:
@@ -644,16 +644,16 @@ def _run_spider(
 ):
     """Run a spider and save results using the Database Pipeline."""
 
-    # Data Manager'ı oluştur
+    # Create Data Manager
     db_manager = PriceDataManager(database_type=db_connection_type)
 
     settings = {
         "LOG_LEVEL": "INFO",
         "TWISTED_REACTOR": "twisted.internet.selectreactor.SelectReactor",
         "ITEM_PIPELINES": {
-            "__main__.DatabasePipeline": 300,  # Yeni Pipeline
+            "__main__.DatabasePipeline": 300,  
         },
-        # Pipeline'a Data Manager'ı iletmek için custom setting kullan
+        # Use custom settings to pass the Data Manager to the pipeline.
         "DB_CONNECTION_TYPE": db_connection_type,
     }
 
@@ -667,8 +667,8 @@ def _run_spider(
         print(f"Scrapy Process Error: {e}")
         return []
 
-    # Scrapy bittikten sonra istatistikleri yazdır (opsiyonel)
-    # process.stop() yapmaya gerek yok, process.start() tamamlandığında durur.
+    # Print statistics after Scrapy finishes (optional)
+    # There's no need to use `process.stop()`, `process.start()` will stop when it's complete.
 
     print("\n✅ Scraped data saved to database.")
 
@@ -704,7 +704,7 @@ def main():
 
     if args.site == "multi" and urls:
 
-        # Multi-site: URL'leri siteye göre grupla
+        # Multi-site: Group URLs by site
         url_map = {}
         for url in urls:
             site = _detect_site_from_url(url)

@@ -186,8 +186,8 @@ class AnalysisStrategy(ABC):
 
 class MovingAverageStrategy(AnalysisStrategy):
     """
-    Moving average based analysis.
-    Kısa ve uzun hareketli ortalamaları karşılaştırarak trendi belirler.
+        Moving average-based analysis. 
+        It determines the trend by comparing short-term and long-term moving averages.
     """
 
     def __init__(
@@ -197,51 +197,48 @@ class MovingAverageStrategy(AnalysisStrategy):
         trend_threshold: float = 0.005,
     ):
         """
-        Başlangıçta kısa ve uzun pencereleri ve trend eşiğini ayarlar.
+            Initially, it sets the short and long window durations and the trend threshold.
 
         Args:
-            short_window (int): Kısa hareketli ortalama için gün sayısı (Örn: 5).
-            long_window (int): Uzun hareketli ortalama için gün sayısı (Örn: 20).
-            trend_threshold (float): Trendi UP/DOWN olarak kabul etmek için gereken
-                                     yüzdesel fark eşiği (Örn: 0.005 = %0.5).
+            short_window (int): Number of days for the short moving average (e.g., 5).
+            long_window (int): Number of days for the long moving average (e.g., 20).
+            trend_threshold (float): Percentage difference threshold required to consider the trend as UP/DOWN (e.g., 0.005 = 0.5%).
         """
         self.short_window = short_window
         self.long_window = long_window
-        # 1. DÜZELTME: Eksik trend eşiği eklendi
         self.trend_threshold = trend_threshold
 
     def analyze(self, prices: List[float]) -> Tuple[TrendDirection, float]:
         """
         Fiyatları analiz ederek trend yönünü ve güven skorunu döndürür.
         """
-        # Veri uzunluğu uzun pencereye yetmiyorsa stabil dön
+        # If the data length is insufficient for the long window, a stable return will occur.
         if len(prices) < self.long_window:
             # 0.5 varsayılan güven skoru
             return TrendDirection.STABLE, 0.5
 
-        # Kısa ve uzun hareketli ortalamaları hesapla
+        # Calculate short and long moving averages.
         short_ma = statistics.mean(prices[-self.short_window :])
         long_ma = statistics.mean(prices[-self.long_window :])
 
-        # Kısa MA'nın Uzun MA'ya göre yüzdesel farkı
-        # Trend hassasiyetini artırmak için eşik değeri çok düşürüldü (0.005)
-        # Örn: Eğer kısa MA, uzun MA'dan %0.5'ten fazla yüksekse, UP kabul et.
+        #Percentage difference between Short MA and Long MA
+        # To increase trend sensitivity, the threshold value was lowered significantly (0.005).
+        # Example: If the short-term moving average (SMA) is more than 0.5% higher than the long-term moving average (SMA), accept UP.
 
-        # Güven skorunu fiyat farkının yüzdesi olarak belirleyebiliriz (ya da sabit tutabiliriz)
+        #We can define the confidence score as a percentage of the price difference (or keep it fixed).
         confidence = abs(short_ma - long_ma) / long_ma * 100
 
-        # 2. DÜZELTME: Değişken isimleri (short_ma, long_ma) düzeltildi
         if short_ma > long_ma * (1 + self.trend_threshold):
             return TrendDirection.UP, min(
                 confidence, 100.0
-            )  # Güven skorunu maksimum 100 ile sınırla
+            ) # Limit the trust score to a maximum of 100.
         elif short_ma < long_ma * (1 - self.trend_threshold):
             return TrendDirection.DOWN, min(confidence, 100.0)
         else:
             return TrendDirection.STABLE, min(confidence, 100.0)
 
     def get_name(self) -> str:
-        """Strateji adını döndürür."""
+        """Returns the strategy name."""
         return f"MovingAverage({self.short_window},{self.long_window})"
 
 
@@ -273,25 +270,25 @@ class PercentageChangeStrategy(AnalysisStrategy):
 class VolatilityStrategy(AnalysisStrategy):
     """Volatility based analysis"""
 
-    def __init__(self, volatility_threshold: float):
-        self.volatility_threshold = volatility_threshold
+    def __init__(self, volatility_threshold: float = 0.05):
+        self.threshold = volatility_threshold
+        super().__init__()
 
     def analyze(self, prices: List[float]) -> Tuple[TrendDirection, float]:
-        # ...
-        # 1. Ortalama fiyatı hesaplayın
+       #1. Calculate the average price.
         mean_price = sum(prices) / len(prices)
 
-        # 2. Fiyat değişimlerini hesaplayın (Standart Sapma için)
-        # std_dev = numpy.std(prices) # Eğer numpy kullanıyorsanız
+        # 2. Calculate price changes (for Standard Deviation)
+        # std_dev = numpy.std(prices) # If you are using numpy
 
-        # Numpy kullanmıyorsanız, manuel olarak standart sapmayı hesaplayın (veya varyansı)
+        # If you are not using Numpy, manually calculate the standard deviation (or variance)
         variance = sum([(p - mean_price) ** 2 for p in prices]) / len(prices)
         std_dev = variance**0.5
 
-        # Volatiliteyi yüzdesel olarak ortalamaya göre hesaplayın
+        # Calculate volatility as a percentage relative to the average.
         volatility_percent = std_dev / mean_price
 
-        if volatility_percent > self.volatility_threshold:
+        if volatility_percent > self.threshold:
             return TrendDirection.VOLATILE, volatility_percent * 100
         else:
             return TrendDirection.STABLE, volatility_percent * 100

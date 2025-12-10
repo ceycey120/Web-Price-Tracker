@@ -334,19 +334,16 @@ class PriceChartVisualizer:
 
         fig = go.Figure()
 
-        # 1. Ana Fiyat Çizgisi (Çoklu Güncelleme)
+        # 1.Main Price Line 
         fig.add_trace(
             go.Scatter(
                 x=df2.index,
                 y=df2["current_price"],
-                # 🚨 KRİTİK DÜZELTME: mode parametresine '+text' eklenmelidir.
-                # Bu, Plotly'ye her noktada metin çizeceğini söyler.
+                # This tells Plotly to draw text at every point.
                 mode="lines+markers+text",
                 name="Current Price",
                 line=dict(color="#1f77b4", width=2),
-                # 🚨 KRİTİK DÜZELTME: text argümanı, her veri noktasına ait fiyatı içerir.
                 text=[f"₺{p:.2f}" for p in df2["current_price"]],
-                # 💡 İYİLEŞTİRME: Etiketin konumunu ayarlayın. "top center" genellikle iyidir.
                 textposition="top center",
                 textfont=dict(color="#1f77b4", size=10),
             )
@@ -356,27 +353,27 @@ class PriceChartVisualizer:
             go.Scatter(
                 x=df2.index,
                 y=df2["ma"],
-                mode="lines+markers",  # +text EKLEMEK İSTENİRSE BURAYA DA EKLENİR
+                mode="lines+markers",  
                 name=f"{window}-Daily Avgrage",
                 line=dict(color="orange", width=3, dash="dash"),
             )
         )
 
-        # 3. YATAY MİNİMUM ÇİZGİSİ (Analitik Değer)
-        if min_price != max_price:  # Tek bir fiyattan kaçınmak için
+        # 3. HORIZONTAL MINIMUM LINE (Analytical Value)
+        if min_price != max_price:  # To avoid a single price
             fig.add_hline(
                 y=min_price,
                 line_dash="dot",
-                line_color="#2ca02c",  # Yeşil
+                line_color="#2ca02c",  
                 annotation_text=f"Min Price: {min_price:.2f} TL",
                 annotation_position="bottom left",
             )
 
-        # 4. YATAY MAKSİMUM ÇİZGİSİ (Analitik Değer)
+        # 4. HORIZONTAL MAXIMUM LINE (Analytical Value)
         fig.add_hline(
             y=max_price,
             line_dash="dot",
-            line_color="#d62728",  # Kırmızı
+            line_color="#d62728",  
             annotation_text=f"Max Price: {max_price:.2f} TL",
             annotation_position="top left",
         )
